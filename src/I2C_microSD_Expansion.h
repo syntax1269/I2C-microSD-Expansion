@@ -83,7 +83,7 @@ class I2CmicroSD {
   // to `outCap` means POSSIBLY TRUNCATED, not an exact fit — raise outCap or
   // page through the directory when you need to know.
   uint8_t listDir(const char *path, DirEntry *out, uint8_t outCap);
-  uint8_t version(char *buf, uint8_t buflen);         // module version string
+  uint8_t version(char *buf, uint8_t buflen);         // version; 0 + INVALID if buffer too small
   uint8_t firmwareBanner(char *buf, uint8_t buflen);  // full CMD_VERSION answer (banner on >=18.8)
   uint32_t firmwareClockHz();                         // measured clock from banner (0 when absent)
   uint16_t temperatureK();                            // whole kelvin, 0xFFFF on error

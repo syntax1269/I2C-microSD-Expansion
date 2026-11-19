@@ -4,6 +4,28 @@ All notable changes to the Arduino host library are documented here. The format
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.44] - 2026-11-19
+
+### Fixed
+
+- **Example sketch filename matches its folder.** `examples/NanoMinimal/` now
+  contains `NanoMinimal.ino`, so `arduino-lint` and the IDE/CLI accept it as a
+  valid sketch.
+- **`library.properties` category corrected** from the invalid `Storage` to the
+  spec value `Data Storage`, so the library is no longer listed as
+  "Uncategorized".
+
+### Added / polish
+
+- Added `keywords.txt` for IDE syntax highlighting of the public API.
+- Documented in the `version()` header comment that a too-small buffer returns
+  `0` with `MICROSDEXP_INVALID`.
+- The ESP8266 demo's `/api/temp` now returns a 503 JSON error when
+  `temperatureK()` returns the `0xFFFF` sentinel instead of reporting 65262 °C.
+- Earlier example hardening since 0.1.43: clamped `snprintf` buffer offsets,
+  documented `listDir()` truncation semantics, and softened AbruptRecovery's
+  filename-uniqueness claim.
+
 ## [0.1.43] - 2026-11-19
 
 ### Fixed
