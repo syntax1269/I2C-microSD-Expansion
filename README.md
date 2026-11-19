@@ -412,6 +412,12 @@ More detail in the [wiki](wiki/Home.md), especially
 
 ---
 
+## Documentation
+
+Full API documentation is published at https://i2c-microsd-expansion.readthedocs.io/ and can be built locally with `Sphinx <https://www.sphinx-doc.org/>`_ from `docs/`.
+
+---
+
 ## License
 
 MIT. See [LICENSE](LICENSE). Not affiliated with the SD Association.
