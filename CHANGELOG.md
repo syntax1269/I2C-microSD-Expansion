@@ -4,6 +4,34 @@ All notable changes to the Arduino host library are documented here. The format
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.43] - 2026-11-19
+
+### Fixed
+
+- **ESP8266 404 handler string literal.** Restored the `\n` escapes in the
+  format string so the example compiles again.
+- **README code fences.** Moved the sticky-error explanation out of the `cpp`
+  fence in the error-handling section so it renders as prose; the same correction
+  was applied to the staged Python-port READMEs.
+- **Duplicated changelog entry.** Removed the global-`File`-typedef bullet from
+  the already-released 0.1.31 section; it remains recorded once under 0.1.32.
+- **Version banner in the ESP8266 root page.** The module-controlled `version()`
+  string is now passed through `H1()` like every other dynamic interpolation.
+
+### Also in this release
+
+- Fixed the garbled Library Manager `paragraph` in `library.properties`.
+- Refreshed stale numeric comments (NeoPixel frame size, WebSDModule clock,
+  `CIRUIT` typo) and corrected the `fatType` comment to the SdFat values
+  12 / 16 / 32 / 64.
+- Replaced the false RAII-guard comment in the async web example with the
+  idle-flush self-healing behaviour that actually happens.
+- Serialised concurrent uploads in the async example (409 for a second client
+  plus a stale-handle reclaim after 30 s idle).
+- Added `htmlEscape()` / `urlEncode()` / `jsonEscape()` to all three Wi-Fi
+  examples and applied them to every dynamic interpolation; added trusted-LAN
+  notes to their READMEs.
+
 ## [0.1.42] - 2026-11-19
 
 ### Added
@@ -144,12 +172,6 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.1.31] - 2026-11-18
 
 ### Fixed
-- **Global `File` typedef removed.** `openFile()` and the four C-style helpers
-  (`fileWrite`, `fileRead`, `fileSync`, `fileClose`) now take/return
-  `MicroSDExpFile *` directly instead of aliasing a global `File` type. Sketches
-  that also include `SD.h` or an `FS.h`-based component no longer hit a
-  conflicting-declaration error. All shipped examples and tests were updated.
-
 - **`version()` against firmware ≥ 18.8.** CMD `0x0F` answers with a 112-byte
   banner whose first line is the measured clock; the old 16-byte read returned
   `"20000000"` instead of the version. `version()` now scans the full banner for

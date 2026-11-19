@@ -47,8 +47,10 @@ void setup() {
   }
 
   // Phase 1: partial WRITE (1 KB of 4 KB), then total silence.
-  // Use a boot-unique name so leftover state from a prior aborted run can't
-  // shadow the write (the host does the same with millis ids).
+  // Use a usually-unique name so leftover state from a prior aborted run is
+  // unlikely to shadow the write (the host does the same with millis ids).
+  // Two boots reaching this line in the same uptime second collide — common
+  // in watchdog-reset loops — but that is benign: openWrite truncates.
   char exPath[32];
   snprintf(exPath, sizeof(exPath), "AbruptEx_%lu.BIN", (unsigned long)((millis() / 1000) % 10000));
   char ex2Path[32];

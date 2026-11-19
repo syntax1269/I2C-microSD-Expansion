@@ -434,6 +434,7 @@ static void handleRoot(AsyncWebServerRequest *req) {
   int tn = snprintf(table, sizeof(table),
                     "<table id=fileTable><thead><tr><th>Type</th><th>Name</th><th>Size</th></tr></thead><tbody>");
   if (tn < 0) tn = 0;
+  if ((size_t)tn >= sizeof(table)) tn = sizeof(table) - 1;
   for (uint8_t i = 0; i < count; i++) {
     char entry[MAX_PATH];
     joinPath(dir, g_entries[i].name, entry, sizeof(entry));
@@ -586,6 +587,7 @@ static void handleList(AsyncWebServerRequest *req) {
                    "</div><div class=crumbs id=crumbs></div>",
                    H1(dir), kCss, H2(dir), H3(dir));
   if (n < 0) n = 0;
+  if ((size_t)n >= sizeof(html)) n = sizeof(html) - 1;
   char parent[MAX_PATH];
   dirOf(dir, parent, sizeof(parent));
   if (!(dir[0] == '/' && dir[1] == '\0')) {
@@ -924,6 +926,7 @@ static void handleApiList(AsyncWebServerRequest *req) {
   static char out[2048];
   int m = snprintf(out, sizeof(out), "{\"dir\":\"%s\",\"count\":%u,\"entries\":[", J1(dir), n);
   if (m < 0) m = 0;
+  if ((size_t)m >= sizeof(out)) m = sizeof(out) - 1;
   for (uint8_t i = 0; i < n; i++) {
     int k = snprintf(out + m, sizeof(out) - (size_t)m,
                      "%s{\"isDir\":%s,\"name\":\"%s\",\"size\":%lu}", i ? "," : "",

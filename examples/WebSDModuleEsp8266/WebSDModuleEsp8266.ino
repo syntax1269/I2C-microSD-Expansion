@@ -176,7 +176,7 @@ static void handleRoot() {
   g_server.sendContent("<!DOCTYPE html><html><head><title>module Esp8266</title></head><body>");
   g_server.sendContent("<h2>ESP01-S I²C microSD Expansion</h2>");
   char b[128];
-  snprintf(b, sizeof(b), "<p>module <b>0x6E</b> fw <b>%s</b> SDA0/SCL2 1MHz</p>", v);
+  snprintf(b, sizeof(b), "<p>module <b>0x6E</b> fw <b>%s</b> SDA0/SCL2 1MHz</p>", H1(v));
   g_server.sendContent(b);
   g_server.sendContent("<p><a href='/listSDCard?DIR=/'>Files</a> <a href='/api/info'>/api/info</a> <a href='/api/version'>/api/version</a> <a href='/api/status'>/api/status</a> <a href='/api/temp'>/api/temp</a></p>");
   g_server.sendContent("<form method='POST' action='/upload' enctype='multipart/form-data'><div class=drop id=dropUpload><input type='file' name='file' id=fileInput> <button type='submit'>Upload to /</button></div></form>");
@@ -270,9 +270,7 @@ static void handleUploadPiece() {
 }
 static void handleUploadPost() { char msg[32]; snprintf(msg,sizeof(msg),"%s %lu",g_upload_ok?"OK":"FAIL",(unsigned long)g_upload_bytes); g_microSDexp.begin(MICROSDEXP_ADDR, I2C_IDLE_HZ); g_server.send(g_upload_ok?200:500,"text/plain",msg); }
 static void handleDownload() { static char path[MAX_PATH]; if (g_server.hasArg("file")) copyArg("file",path,sizeof(path)); else copyUri(path,sizeof(path)); if (path[0]=='\0') { g_server.send(400,"text/plain","Missing file"); return; } bool dl = g_server.hasArg("download"); serveFile(path,dl); }
-static void handleNotFound() { static char uri[MAX_PATH]; copyUri(uri,sizeof(uri)); if (g_microSDexp.exists(uri)) { serveFile(uri,false); return; } char row[512]; snprintf(row,sizeof(row),"Not found: %s
-Method: %s
-Args: %d",H1(uri),g_server.method()==HTTP_GET?"GET":"POST",(int)g_server.args()); g_server.send(404,"text/html",row); }
+static void handleNotFound() { static char uri[MAX_PATH]; copyUri(uri,sizeof(uri)); if (g_microSDexp.exists(uri)) { serveFile(uri,false); return; } char row[512]; snprintf(row,sizeof(row),"Not found: %s\nMethod: %s\nArgs: %d",H1(uri),g_server.method()==HTTP_GET?"GET":"POST",(int)g_server.args()); g_server.send(404,"text/html",row); }
 
 static void handleApiStatus() { StatusFrame st; if (!g_microSDexp.readStatus(st)) { g_server.send(503,"application/json","{\"error\":\"no-module\"}"); return; } static char b[256]; snprintf(b,sizeof(b),"{\"rev\":%u,\"state\":%u,\"opDone\":%u,\"error\":%u,\"rxFree\":%u,\"txAvail\":%u,\"result\":%lu}",(unsigned)st.rev,(unsigned)st.state,(unsigned)st.opDone,(unsigned)st.error,(unsigned)st.rxFree,(unsigned)st.txAvail,(unsigned long)st.result); g_server.send(200,"application/json",b); }
 static void handleApiVersion() { char v[24]; if (g_microSDexp.version(v,sizeof(v))==0) { g_server.send(500,"application/json","{\"error\":\"no-module\"}"); return; } char b[64]; snprintf(b,sizeof(b),"{\"version\":\"%s\"}",J1(v)); g_server.send(200,"application/json",b); }
@@ -280,7 +278,7 @@ static void handleApiInfo() { CardInfo ci; if (!g_microSDexp.cardInfo(&ci)) { g_
 static void handleApiTemp() { uint16_t k=g_microSDexp.temperatureK(); char b[64]; snprintf(b,sizeof(b),"{\"kelvin\":%u,\"celsius\":%d}",(unsigned)k,(int)k-273); g_server.send(200,"application/json",b); }
 static void handleApiSize() { char path[MAX_PATH]; copyArg("file",path,sizeof(path)); char b[384]; snprintf(b,sizeof(b),"{\"file\":\"%s\",\"size\":%lu,\"exists\":%d}",J1(path),(unsigned long)g_microSDexp.fileSize(path),g_microSDexp.exists(path)?1:0); g_server.send(200,"application/json",b); }
 static void handleApiExists() { char path[MAX_PATH]; copyArg("file",path,sizeof(path)); char b[384]; snprintf(b,sizeof(b),"{\"file\":\"%s\",\"exists\":%d,\"isDirectory\":%d}",J1(path),g_microSDexp.exists(path)?1:0,g_microSDexp.isDirectory(path)?1:0); g_server.send(200,"application/json",b); }
-static void handleApiList() { char dir[MAX_PATH]; if (g_server.hasArg("DIR")) copyArg("DIR",dir,sizeof(dir)); else { dir[0]='/'; dir[1]='\0'; } uint8_t n=g_microSDexp.listDir(dir,g_entries,MAX_ENTRIES); static char out[4096]; int m=snprintf(out,sizeof(out),"{\"dir\":\"%s\",\"count\":%u,\"entries\":[",J1(dir),n); if(m<0)m=0; for(uint8_t i=0;i<n;i++){ int k=snprintf(out+m,sizeof(out)-(size_t)m,"%s{\"isDir\":%s,\"name\":\"%s\",\"size\":%lu}",i?",":"",g_entries[i].isDir?"true":"false",J2(g_entries[i].name),(unsigned long)g_entries[i].size); if(k<=0)break; m+=k; if((size_t)m>=sizeof(out))break; } snprintf(out+m,sizeof(out)-(size_t)m,"]}");
+static void handleApiList() { char dir[MAX_PATH]; if (g_server.hasArg("DIR")) copyArg("DIR",dir,sizeof(dir)); else { dir[0]='/'; dir[1]='\0'; } uint8_t n=g_microSDexp.listDir(dir,g_entries,MAX_ENTRIES); static char out[4096]; int m=snprintf(out,sizeof(out),"{\"dir\":\"%s\",\"count\":%u,\"entries\":[",J1(dir),n); if(m<0)m=0; if((size_t)m>=sizeof(out))m=(int)sizeof(out)-1; for(uint8_t i=0;i<n;i++){ int k=snprintf(out+m,sizeof(out)-(size_t)m,"%s{\"isDir\":%s,\"name\":\"%s\",\"size\":%lu}",i?",":"",g_entries[i].isDir?"true":"false",J2(g_entries[i].name),(unsigned long)g_entries[i].size); if(k<=0)break; m+=k; if((size_t)m>=sizeof(out))break; } snprintf(out+m,sizeof(out)-(size_t)m,"]}");
   g_server.send(200,"application/json",out); }
 
 void setup() {

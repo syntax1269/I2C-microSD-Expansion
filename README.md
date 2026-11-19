@@ -194,6 +194,11 @@ for (uint8_t i = 0; i < n; i++) {
 }
 ```
 
+`n == maxEntries` means **possibly truncated**, not an exact fit. The listing
+may contain more entries than the array holds; the return value is capped at
+`outCap`. Raise the cap or page through the directory when the distinction
+matters.
+
 ### Card and module information
 
 ```cpp
@@ -308,13 +313,14 @@ if (microSDexp.lastError() != MICROSDEXP_OK) {
 if (microSDexp.fileOpen()) microSDexp.close();
 if (microSDexp.stickyError() != MICROSDEXP_OK) { /* real fault */ }
 microSDexp.clearError();   // start a fresh error window
+```
+
 `lastError()` is the result of the *most recent* call and may be overwritten by
 internal calls (for example, a `listDir()` drain). Use `stickyError()` for the
 first failure since `clearError()` when you need an error that internal traffic
 cannot hide. `version()` returns `0` with `MICROSDEXP_INVALID` when the caller's
 buffer is too small to reach the dotted version token in the banner.
 
-```
 
 | Code | Meaning |
 |---|---|

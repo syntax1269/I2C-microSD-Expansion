@@ -79,7 +79,10 @@ class I2CmicroSD {
 
 #if !defined(Tinyi2cStorage) && !defined(I2CSDMODULE_MINIMAL)
   bool isDirectory(const char *path);                 // true if path is a dir
-  uint8_t listDir(const char *path, DirEntry *out, uint8_t outCap); // list dir
+  // List a directory into `out` (max `outCap` entries). A return value equal
+  // to `outCap` means POSSIBLY TRUNCATED, not an exact fit — raise outCap or
+  // page through the directory when you need to know.
+  uint8_t listDir(const char *path, DirEntry *out, uint8_t outCap);
   uint8_t version(char *buf, uint8_t buflen);         // module version string
   uint8_t firmwareBanner(char *buf, uint8_t buflen);  // full CMD_VERSION answer (banner on >=18.8)
   uint32_t firmwareClockHz();                         // measured clock from banner (0 when absent)
