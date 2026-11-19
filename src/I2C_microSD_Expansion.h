@@ -2,7 +2,9 @@
 #define I2C_MICROSD_EXPANSION_H
 // I2C_microSD_Expansion.h — public header for the I²C microSD Expansion
 // Arduino host library. Zero heap, fixed buffers, no String, no Serial.
-// One open file at a time by design.
+// One open file at a time by design. Not reentrant or interrupt-safe: use one
+// instance from one call site; the single file handle and shared staging
+// buffer are not protected against nested calls.
 #include <Arduino.h>
 #include "protocol.h"
 #include "I2C_microSD_Expansion_Config.h"
@@ -37,6 +39,7 @@ class I2CmicroSD {
   // Probe the module at the given I2C address and clock speed.
   // Returns true when the module answers STATUS.
   bool begin(uint8_t address = I2CMICROSD_DEFAULT_ADDRESS, uint32_t clockHz = 400000);
+  uint8_t address() const;  // address actually bound by begin() (incl. fallback)
   void setPollInterval(uint16_t ms);
   // Bytes requested per READ drain, clamped to 1..I2CMICROSD_READ_CHUNK_MAX.
   // Raise to 256 only after the host Wire receive buffer is enlarged
@@ -46,6 +49,12 @@ class I2CmicroSD {
   size_t readChunkBytes() const;
 
   // ---- Low-level transport (advanced use) ----
+  // Best-effort recovery for a stuck bus. Sends 9 general-call writes to
+  // address 0x00, which other general-call-capable slaves may respond to;
+  // cores that reject 0x00 simply report errors. NOT called by begin().
+  // A true 9-clock + STOP recovery needs raw SDA/SCL pin control that Wire
+  // does not expose. Call only when you know the bus is stuck.
+  void recoverBus();
   bool readStatus(StatusFrame &out);
   int waitForOpComplete(uint8_t doneBefore, uint32_t timeoutMs = I2CMICROSD_OP_TIMEOUT_MS);
   bool waitForCommitted(uint32_t target, uint32_t timeoutMs = I2CMICROSD_COMMIT_TIMEOUT_MS);
@@ -74,8 +83,8 @@ class I2CmicroSD {
   uint8_t version(char *buf, uint8_t buflen);         // module version string
   uint8_t firmwareBanner(char *buf, uint8_t buflen);  // full CMD_VERSION answer (banner on >=18.8)
   uint32_t firmwareClockHz();                         // measured clock from banner (0 when absent)
-  uint16_t temperatureK();                            // die temperature, whole kelvin (LE)
-  uint16_t adcPA5();                                  // PA5 ADC raw (0xFFFF = n/a)
+  uint16_t temperatureK();                            // whole kelvin, 0xFFFF on error
+  uint16_t adcPA5();                                  // raw 12-bit ADC; 0xFFFF on error/n/a
   bool cardInfo(CardInfo *out);                       // card/volume snapshot
   void setClockTime(uint8_t y, uint8_t mo, uint8_t d, uint8_t h, uint8_t mi, uint8_t s);
   void reboot();                                      // reboot the module
@@ -106,16 +115,32 @@ class I2CmicroSD {
   // nothing changed since the last save.
   void savePINMode();
 
-  MicroSDExpError lastError() const;
+  MicroSDExpError lastError() const;   // result of the most recent call
+  MicroSDExpError stickyError() const; // first failure since clearError()
+  void clearError();                   // reset lastError() and stickyError()
   bool fileOpen() const;
 
  private:
+  bool readOpDone(uint8_t &opDone);
   uint8_t  _addr;
   uint32_t _sclHz;
   uint16_t _pollMs;
   uint16_t _flowPollMs;
   size_t   _readChunk;
-  MicroSDExpError _lastError;
+  // Last result plus the first failure since clearError(). Internal
+  // calls can overwrite lastError(), but cannot hide a real fault here.
+  struct ErrorSlot {
+    MicroSDExpError last;
+    MicroSDExpError sticky;
+    explicit ErrorSlot(MicroSDExpError e) : last(e), sticky(e) {}
+    ErrorSlot &operator=(MicroSDExpError e) {
+      last = e;
+      if (e != MICROSDEXP_OK) sticky = e;
+      return *this;
+    }
+    operator MicroSDExpError() const { return last; }
+  };
+  ErrorSlot _lastError;
   bool _fileOpen;
   bool _appendMode;
   bool _readStarted;
@@ -153,15 +178,14 @@ struct MicroSDExpFile {
   int8_t   dummy;  // alignment padding
   I2CmicroSD *microSDexp;
 };
-typedef MicroSDExpFile File;
 
 // C-style file API (mirrors Arduino File pattern).
 extern "C" {
-File *openFile(I2CmicroSD *b, const char *path, const char *mode);  // "r" | "w" | "a"
-size_t fileWrite(File *f, const uint8_t *buf, size_t len);
-size_t fileRead(File *f, uint8_t *buf, size_t len);
-bool fileSync(File *f);
-bool fileClose(File *f);
+MicroSDExpFile *openFile(I2CmicroSD *b, const char *path, const char *mode);  // "r" | "w" | "a"
+size_t fileWrite(MicroSDExpFile *f, const uint8_t *buf, size_t len);
+size_t fileRead(MicroSDExpFile *f, uint8_t *buf, size_t len);
+bool fileSync(MicroSDExpFile *f);
+bool fileClose(MicroSDExpFile *f);
 }
 
 #endif  // I2C_MICROSD_EXPANSION_H

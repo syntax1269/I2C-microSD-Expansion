@@ -68,10 +68,23 @@ static I2CmicroSD g_microSDexp;
 static AsyncWebServer g_server(80);
 
 // Upload streaming state: ESPAsyncWebServer calls the upload callback per
-// multipart chunk, so the open File* must live across callbacks.
-static File *g_upload = nullptr;
+// multipart chunk, so the open MicroSDExpFile * must live across callbacks.
+static MicroSDExpFile *g_upload = nullptr;
 static bool g_upload_ok = false;
 static uint32_t g_upload_bytes = 0;
+static AsyncWebServerRequest *g_upload_owner = nullptr;
+static uint32_t g_upload_last_ms = 0;
+
+// A client that vanishes mid-upload may never call the finaliser. Reclaim the
+// handle after a quiet period so one aborted upload cannot lock out all later
+// ones.
+static void releaseStaleUpload() {
+  if (g_upload && (millis() - g_upload_last_ms) > 30000UL) {
+    if (g_upload_ok) fileClose(g_upload);
+    g_upload = nullptr;
+    g_upload_owner = nullptr;
+  }
+}
 
 // One listing page. DirEntry.name is 64 B (LFN truncated) — see protocol.h.
 static DirEntry g_entries[MAX_ENTRIES];
@@ -107,6 +120,79 @@ static void copyUri(AsyncWebServerRequest *req, char *dst, size_t cap) {
   }
   dst[n] = '\0';
 }
+
+
+// --- Output escaping -------------------------------------------------------
+// Filenames and DIR arguments come from the card or the request. Never place
+// them in HTML, attributes, JS literals or JSON without encoding first.
+static void htmlEscape(const char *src, char *dst, size_t cap) {
+  size_t o = 0;
+  if (cap == 0) return;
+  for (const char *p = src; *p && o + 6 < cap; ++p) {
+    switch (*p) {
+      case '&': memcpy(dst + o, "&amp;", 5); o += 5; break;
+      case '<': memcpy(dst + o, "&lt;", 4); o += 4; break;
+      case '>': memcpy(dst + o, "&gt;", 4); o += 4; break;
+      case '"': memcpy(dst + o, "&quot;", 6); o += 6; break;
+      case '\'': memcpy(dst + o, "&#39;", 5); o += 5; break;
+      default: dst[o++] = *p;
+    }
+  }
+  dst[o] = '\0';
+}
+
+// Percent-encode for href/query components and JavaScript string literals.
+static void urlEncode(const char *src, char *dst, size_t cap) {
+  static const char hex[] = "0123456789ABCDEF";
+  size_t o = 0;
+  if (cap == 0) return;
+  for (const char *p = src; *p && o + 3 < cap; ++p) {
+    unsigned char c = (unsigned char)*p;
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+        (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' ||
+        c == '~' || c == '/') {
+      dst[o++] = (char)c;
+    } else {
+      dst[o++] = '%';
+      dst[o++] = hex[c >> 4];
+      dst[o++] = hex[c & 0x0F];
+    }
+  }
+  dst[o] = '\0';
+}
+
+static void jsonEscape(const char *src, char *dst, size_t cap) {
+  size_t o = 0;
+  if (cap == 0) return;
+  for (const char *p = src; *p && o + 6 < cap; ++p) {
+    unsigned char c = (unsigned char)*p;
+    switch (c) {
+      case '"': memcpy(dst + o, "\\\"", 2); o += 2; break;
+      case '\\': memcpy(dst + o, "\\\\", 2); o += 2; break;
+      case '\n': memcpy(dst + o, "\\n", 2); o += 2; break;
+      case '\r': memcpy(dst + o, "\\r", 2); o += 2; break;
+      case '\t': memcpy(dst + o, "\\t", 2); o += 2; break;
+      case '<': memcpy(dst + o, "\\u003c", 6); o += 6; break;
+      case '>': memcpy(dst + o, "\\u003e", 6); o += 6; break;
+      case '&': memcpy(dst + o, "\\u0026", 6); o += 6; break;
+      default: dst[o++] = (char)c;
+    }
+  }
+  dst[o] = '\0';
+}
+
+// Distinct slots so several values can be escaped in one snprintf call.
+static char g_html[3][MAX_PATH];
+static char g_url[3][MAX_PATH];
+static char g_json[3][MAX_PATH];
+#define H1(s) htmlEscape((s), g_html[0], sizeof(g_html[0]))
+#define H2(s) htmlEscape((s), g_html[1], sizeof(g_html[1]))
+#define H3(s) htmlEscape((s), g_html[2], sizeof(g_html[2]))
+#define U1(s) urlEncode((s), g_url[0], sizeof(g_url[0]))
+#define U2(s) urlEncode((s), g_url[1], sizeof(g_url[1]))
+#define U3(s) urlEncode((s), g_url[2], sizeof(g_url[2]))
+#define J1(s) jsonEscape((s), g_json[0], sizeof(g_json[0]))
+#define J2(s) jsonEscape((s), g_json[1], sizeof(g_json[1]))
 
 static size_t boundedLen(const char *p) {
   size_t n = 0;
@@ -199,12 +285,13 @@ static void redirect303(AsyncWebServerRequest *req, const char *loc) {
 // (ESPAsyncWebServer docs) — the module read *is* the data source, so one
 // short read per fill is the intended pattern.
 //
-// Abort story (Async): if the client dies, the engine simply stops calling
-// the callback and deletes the response. The RAII guard below owns the
-// module File* (captured by value into the lambda) and fileClose()s it on
-// destruction, so an aborted 5.6 MB download frees the module without a
-// wedged socket. Unlike the sync demo, no client.connected() poll or 200 ms
-// socket-timeout guard is needed.
+// Abort story (Async): if the client dies, the engine stops calling the fill
+// callback and deletes the response. The file is closed at EOF by the callback
+// below; on an aborted transfer it stays open until the module's 5 s bus-idle
+// flush closes it and advances opDone. The next open's CLOSE_FLUSH barrier
+// (gated on a >4 s gap) resynchronises, so no handle leaks permanently.
+// Unlike the sync demo there is no client.connected() poll or 200 ms
+// socket-timeout guard here.
 // Watchdog: the previous blocking
 // stream->write loop starved async_tcp (task_wdt -> reboot). Feeding alone
 // was not enough because the loop occupied the TCP task for minutes; the
@@ -216,13 +303,13 @@ static void serveFile(AsyncWebServerRequest *req, const char *path, bool downloa
   }
   const char *mime = download ? "application/octet-stream" : mimeOf(path);
   uint32_t sz = g_microSDexp.fileSize(path);
-  File *f = openFile(&g_microSDexp, path, "r");
+  MicroSDExpFile *f = openFile(&g_microSDexp, path, "r");
   if (!f) {
     req->send(500, "text/plain", "open failed");
     return;
   }
   // Capture f + sz by value into the lambda (the docs' segfault trap is
-  // capturing a reference to a stack File that dies with the handler).
+  // capturing a reference to a stack MicroSDExpFile that dies with the handler).
   // sz == 0 is legal (empty file): the engine needs no callback.
   if (sz == 0) {
     fileClose(f);
@@ -258,7 +345,7 @@ static void serveFile(AsyncWebServerRequest *req, const char *path, bool downloa
     char da[320];
     char base[MAX_PATH];
     baseOf(path, base, sizeof(base));
-    snprintf(da, sizeof(da), "attachment; filename=\"%s\"", base);
+    snprintf(da, sizeof(da), "attachment; filename=\"%s\"", U1(base));
     res->addHeader("Content-Disposition", da);
   }
   req->send(res);
@@ -276,10 +363,10 @@ static const char kExampleList[] =
     "}</pre>";
 static const char kExampleWrite[] =
     "<pre>// Write + append (append is always legacy 0x04, never 0x21)\n"
-    "File* w = openFile(&amp;microSDexp, \"/LOG.TXT\", \"w\");\n"
+    "MicroSDExpFile * w = openFile(&amp;microSDexp, \"/LOG.TXT\", \"w\");\n"
     "fileWrite(w, (const uint8_t*)\"hello \", 6);\n"
     "fileClose(w);\n"
-    "File* a = openFile(&amp;microSDexp, \"/LOG.TXT\", \"a\");\n"
+    "MicroSDExpFile * a = openFile(&amp;microSDexp, \"/LOG.TXT\", \"a\");\n"
     "fileWrite(a, (const uint8_t*)\"again\\n\", 6);\n"
     "fileClose(a);</pre>";
 static const char kExampleQuery[] =
@@ -352,10 +439,10 @@ static void handleRoot(AsyncWebServerRequest *req) {
     joinPath(dir, g_entries[i].name, entry, sizeof(entry));
     int k = g_entries[i].isDir ? snprintf(table + tn, sizeof(table) - (size_t)tn,
                                           "<tr><td>[D]</td><td><a href='/listSDCard?DIR=%s'>%s/</a></td><td>---</td></tr>",
-                                          entry, g_entries[i].name)
+                                          U1(entry), H2(g_entries[i].name))
                                : snprintf(table + tn, sizeof(table) - (size_t)tn,
                                           "<tr><td>[F]</td><td><a href='/download?file=%s'>%s</a></td><td>%lu</td></tr>",
-                                          entry, g_entries[i].name,
+                                          U1(entry), H2(g_entries[i].name),
                                           (unsigned long)g_entries[i].size);
     if (k <= 0) break;
     tn += k;
@@ -497,13 +584,13 @@ static void handleList(AsyncWebServerRequest *req) {
                    "<h2 style='margin:0'>%s</h2>"
                    "<input id=q placeholder='Search in this folder…' style='max-width:260px'>"
                    "</div><div class=crumbs id=crumbs></div>",
-                   dir, kCss, dir, dir);
+                   H1(dir), kCss, H2(dir), H3(dir));
   if (n < 0) n = 0;
   char parent[MAX_PATH];
   dirOf(dir, parent, sizeof(parent));
   if (!(dir[0] == '/' && dir[1] == '\0')) {
     snprintf(html + n, sizeof(html) - (size_t)n,
-             "<p><a href='/listSDCard?DIR=%s'>&#8592; Up</a></p>", parent);
+             "<p><a href='/listSDCard?DIR=%s'>&#8592; Up</a></p>", U1(parent));
   }
   n += (int)strlen(html + n);
   uint8_t total = g_microSDexp.listDir(dir, g_entries, MAX_ENTRIES);
@@ -524,13 +611,13 @@ static void handleList(AsyncWebServerRequest *req) {
       if (g_entries[i].isDir) {
         snprintf(row, sizeof(row),
                  "<tr><td>[D]</td><td>---</td><td><a href='./listSDCard?DIR=%s'>%s/</a></td><td>---</td></tr>",
-                 entry, g_entries[i].name);
+                 U1(entry), H2(g_entries[i].name));
       } else {
         snprintf(row, sizeof(row),
                  "<tr><td>[F]</td><td><form method='POST' action='/deleteFile' style='display:inline'>"
                  "<input type='hidden' name='file' value='%s'><button>Del</button></form></td>"
                  "<td><a href='/download?file=%s'>%s</a></td><td>%lu</td></tr>",
-                 entry, entry, g_entries[i].name, (unsigned long)g_entries[i].size);
+                 U1(entry), H2(entry), H3(g_entries[i].name), (unsigned long)g_entries[i].size);
       }
       snprintf(html + n, sizeof(html) - (size_t)n, "%s", row);
       n += (int)strlen(html + n);
@@ -555,7 +642,7 @@ static void handleList(AsyncWebServerRequest *req) {
            "const f=e.dataTransfer.files[0];if(!f)return;const fd=new FormData();fd.append('file',f);"
            "const r=await fetch('/upload?dest=%s',{method:'POST',body:fd});const t=await r.text();alert(t);});"
            "</script></body></html>",
-           page, totalPages, dir, dir, dir);
+           page, totalPages, H1(dir), H2(dir), U1(dir));
   req->send(200, "text/html", String(html));
 }
 
@@ -576,7 +663,7 @@ static void handleDelete(AsyncWebServerRequest *req) {
     static char parent[MAX_PATH];
     dirOf(path, parent, sizeof(parent));
     static char loc[300];
-    snprintf(loc, sizeof(loc), "/listSDCard?DIR=%s", parent);
+    snprintf(loc, sizeof(loc), "/listSDCard?DIR=%s", U1(parent));
     redirect303(req, loc);
   } else {
     req->send(500, "text/plain", "Failed to delete file");
@@ -595,7 +682,7 @@ static void handleMkdir(AsyncWebServerRequest *req) {
   }
   if (g_microSDexp.mkdir(dir)) {
     static char loc[300];
-    snprintf(loc, sizeof(loc), "/listSDCard?DIR=%s", dir);
+    snprintf(loc, sizeof(loc), "/listSDCard?DIR=%s", U1(dir));
     redirect303(req, loc);
   } else {
     req->send(500, "text/plain", "Failed to mkdir");
@@ -614,7 +701,7 @@ static void handleRmdir(AsyncWebServerRequest *req) {
     static char parent[MAX_PATH];
     dirOf(dir, parent, sizeof(parent));
     static char loc[300];
-    snprintf(loc, sizeof(loc), "/listSDCard?DIR=%s", parent);
+    snprintf(loc, sizeof(loc), "/listSDCard?DIR=%s", U1(parent));
     redirect303(req, loc);
   } else {
     req->send(500, "text/plain", "Failed to rmdir (empty?)");
@@ -631,7 +718,7 @@ static void handleAppend(AsyncWebServerRequest *req) {
     req->send(400, "text/plain", "Missing file argument");
     return;
   }
-  File *a = openFile(&g_microSDexp, path, "a");
+  MicroSDExpFile *a = openFile(&g_microSDexp, path, "a");
   if (!a) {
     req->send(500, "text/plain", "append open failed");
     return;
@@ -642,12 +729,19 @@ static void handleAppend(AsyncWebServerRequest *req) {
   req->send(ok ? 200 : 500, "text/plain", ok ? "appended" : "append failed");
 }
 
-// --- Upload (multipart streaming): two callbacks, one File, no buffering ---
+// --- Upload (multipart streaming): two callbacks, one open handle, no buffering ---
 // ESPAsyncWebServer delivers the body as a sequence of upload callbacks
 // (index 0 opens, subsequent chunks write, final closes/acks). The open
-// File* must live across callbacks, exactly like the sync demo.
+// MicroSDExpFile * must live across callbacks, exactly like the sync demo.
 static void onUpload(AsyncWebServerRequest *req, String filename, size_t index,
                      uint8_t *data, size_t len, bool final) {
+  // One open file handle and one shared target buffer: reject a second
+  // client's upload instead of interleaving it with the active one.
+  releaseStaleUpload();
+  if (g_upload && req != g_upload_owner) {
+    req->send(409, "text/plain", "upload already in progress");
+    return;
+  }
   if (index == 0) {
     char dest[MAX_PATH];
     // dest rides as a query param (?dest=...) in the Async twin, because
@@ -674,8 +768,11 @@ static void onUpload(AsyncWebServerRequest *req, String filename, size_t index,
     g_upload = openFile(&g_microSDexp, target, "w");
     g_upload_ok = (g_upload != nullptr);
     g_upload_bytes = 0;
+    g_upload_owner = req;
+    g_upload_last_ms = millis();
   }
   if (len > 0) {
+    g_upload_last_ms = millis();
     esp_task_wdt_reset();  // same task_wdt guard as serveFile
     yield();
     if (g_upload && g_upload_ok) {
@@ -694,12 +791,18 @@ static void onUpload(AsyncWebServerRequest *req, String filename, size_t index,
 
 // POST /upload finalizer (runs after onUpload finished anchoring).
 static void handleUploadPost(AsyncWebServerRequest *req) {
+  releaseStaleUpload();
+  if (!g_upload || req != g_upload_owner) {
+    req->send(409, "text/plain", "no upload to finalise");
+    return;
+  }
   char msg[32];
   snprintf(msg, sizeof(msg), "%s %lu", g_upload_ok ? "OK" : "FAIL",
            (unsigned long)g_upload_bytes);
   if (g_upload) {
     if (g_upload_ok) fileClose(g_upload);
     g_upload = nullptr;
+    g_upload_owner = nullptr;
   }
   req->send(g_upload_ok ? 200 : 500, "text/plain", String(msg));
 }
@@ -727,7 +830,7 @@ static void handleNotFound(AsyncWebServerRequest *req) {
     return;
   }
   char row[512];
-  snprintf(row, sizeof(row), "Not found: %s\nMethod: %s\nArgs: %d", uri,
+  snprintf(row, sizeof(row), "Not found: %s\nMethod: %s\nArgs: %d", H1(uri),
            req->method() == HTTP_GET ? "GET" : "POST",
            (int)req->params());
   req->send(404, "text/html", String(row));
@@ -756,7 +859,7 @@ static void handleApiVersion(AsyncWebServerRequest *req) {
     return;
   }
   char b[64];
-  snprintf(b, sizeof(b), "{\"version\":\"%s\"}", v);
+  snprintf(b, sizeof(b), "{\"version\":\"%s\"}", J1(v));
   req->send(200, "application/json", String(b));
 }
 
@@ -794,7 +897,7 @@ static void handleApiSize(AsyncWebServerRequest *req) {
   char path[MAX_PATH];
   copyArg(req, "file", path, sizeof(path));
   char b[320];
-  snprintf(b, sizeof(b), "{\"file\":\"%s\",\"size\":%lu,\"exists\":%d}", path,
+  snprintf(b, sizeof(b), "{\"file\":\"%s\",\"size\":%lu,\"exists\":%d}", J1(path),
            (unsigned long)g_microSDexp.fileSize(path),
            g_microSDexp.exists(path) ? 1 : 0);
   req->send(200, "application/json", String(b));
@@ -804,7 +907,7 @@ static void handleApiExists(AsyncWebServerRequest *req) {
   char path[MAX_PATH];
   copyArg(req, "file", path, sizeof(path));
   char b[320];
-  snprintf(b, sizeof(b), "{\"file\":\"%s\",\"exists\":%d,\"isDirectory\":%d}", path,
+  snprintf(b, sizeof(b), "{\"file\":\"%s\",\"exists\":%d,\"isDirectory\":%d}", J1(path),
            g_microSDexp.exists(path) ? 1 : 0,
            g_microSDexp.isDirectory(path) ? 1 : 0);
   req->send(200, "application/json", String(b));
@@ -819,12 +922,12 @@ static void handleApiList(AsyncWebServerRequest *req) {
   }
   uint8_t n = g_microSDexp.listDir(dir, g_entries, MAX_ENTRIES);
   static char out[2048];
-  int m = snprintf(out, sizeof(out), "{\"dir\":\"%s\",\"count\":%u,\"entries\":[", dir, n);
+  int m = snprintf(out, sizeof(out), "{\"dir\":\"%s\",\"count\":%u,\"entries\":[", J1(dir), n);
   if (m < 0) m = 0;
   for (uint8_t i = 0; i < n; i++) {
     int k = snprintf(out + m, sizeof(out) - (size_t)m,
                      "%s{\"isDir\":%s,\"name\":\"%s\",\"size\":%lu}", i ? "," : "",
-                     g_entries[i].isDir ? "true" : "false", g_entries[i].name,
+                     g_entries[i].isDir ? "true" : "false", J2(g_entries[i].name),
                      (unsigned long)g_entries[i].size);
     if (k <= 0) break;
     m += k;

@@ -19,8 +19,10 @@ void setup() {
   Wire.begin();  // A4/A5 defaults on Nano
   Serial.println("=== Nano minimal ===");
   if (!microSDexp.begin(0x6E, 400000)) { Serial.println("begin FAILED"); return; }
+  // Give the module time to finish mounting the card after power-up;
+  // the first write of a fresh boot otherwise races card initialisation.
   delay(8000);
-  File *w = openFile(&microSDexp, "MINI64.BIN", "w");
+  MicroSDExpFile *w = openFile(&microSDexp, "MINI64.BIN", "w");
   if (!w) { Serial.println("open w FAILED"); return; }
   uint32_t t0 = millis();
   for (uint32_t off = 0; off < 65536; off += 64) {
@@ -30,7 +32,7 @@ void setup() {
   uint32_t wms = millis() - t0;
   if (!fileClose(w)) { Serial.println("close w FAILED"); return; }
   Serial.print("wrote 65536 in "); Serial.print(wms); Serial.println(" ms");
-  File *r = openFile(&microSDexp, "MINI64.BIN", "r");
+  MicroSDExpFile *r = openFile(&microSDexp, "MINI64.BIN", "r");
   if (!r) { Serial.println("open r FAILED"); return; }
   uint32_t c = 0xFFFFFFFFUL, got = 0, mism = 0;
   uint32_t t1 = millis();
@@ -51,7 +53,7 @@ void setup() {
     (got == 65536 && mism == 0 && hash == 0xD660AF09UL) ? "PASS" : "FAIL");
   Serial.println(line);
   // append + queries
-  File *a = openFile(&microSDexp, "NANO.TXT", "a");
+  MicroSDExpFile *a = openFile(&microSDexp, "NANO.TXT", "a");
   if (a) { const uint8_t m[] = {'!'}; fileWrite(a, m, 1); fileClose(a); Serial.println("append OK"); }
   Serial.print("size="); Serial.println((unsigned long)microSDexp.fileSize("NANO.TXT"));
   Serial.println(microSDexp.exists("NANO.TXT") ? "exists 1" : "exists 0");

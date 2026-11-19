@@ -77,8 +77,7 @@ void setup() {
     Serial.println(F("BitBangScript: setPinMode FAILED (pin must be PA5, PB2 or PB3)"));
     return;
   }
-  // The mode change queues an EEPROM write on the module; give it room.
-  delay(150);
+  // Modes apply immediately in RAM; EEPROM is written only by savePINMode().
   if (!microSDexp.bitbangSetMode(BB_PIN)) {
     Serial.println(F("BitBangScript: bitbangSetMode FAILED"));
     return;

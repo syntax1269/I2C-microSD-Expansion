@@ -58,6 +58,14 @@ Different cores number their I²C errors differently; the libraries normalize th
 ESP32 adds a code `4`; AVR / Pico / SAMD share the `0`–`4` range. The library
 maps them consistently so your code sees the same enum on every platform.
 
+## Sticky errors
+
+`last_error` / `lastError()` is the result of the most recent call and can be
+overwritten by internal traffic (for example, a `list_dir()` drain). Use
+`sticky_error` / `stickyError()` for the first failure since
+`clear_error()` / `clearError()` when you need a fault that internal calls
+cannot hide.
+
 ## Troubleshooting table
 
 | Symptom | Likely cause | Fix |
@@ -78,11 +86,17 @@ maps them consistently so your code sees the same enum on every platform.
 
 ## Bus-busy recovery
 
-If a NACK or timeout leaves SDA stuck low, `begin()` performs probing
-transactions and an address scan (`0x6E`, then `0x6A`–`0x6F`). A true 9-clock +
-STOP recovery requires wiggling the SDA/SCL pins, which the `Wire` abstraction
-cannot express; on platforms that expose the raw pins you can implement it
-yourself.
+`begin()` is side-effect-free on the bus: it only performs read-only STATUS
+probes at `0x6E`, then `0x6A`–`0x6F`. A fallback address is adopted only after a
+rev-2 STATUS frame with bounded state/error and a dotted version token, so an
+unrelated 12-byte responder cannot be mistaken for the module. If a NACK or
+timeout leaves SDA stuck low,
+the optional `recoverBus()` method sends 9 general-call writes to address `0x00`.
+This is **best-effort only** and is never called automatically: other
+general-call-capable slaves may respond, and some cores reject `0x00` outright.
+A true 9-clock + STOP recovery requires wiggling the SDA/SCL pins, which the
+`Wire` abstraction cannot express; on platforms that expose the raw pins you can
+implement it yourself.
 
 ## See also
 

@@ -86,6 +86,8 @@ R [0x18] -> adc_word (LE)         # 0..4095, or 0xFFFF if unavailable
 rounded to whole kelvin — **not** an ADC count and not a fixed-point value. The
 host libraries expose it as `temperature_k()` / `temperatureK()`; subtract 273.15
 for degrees Celsius (e.g. `294` ≈ 21 °C).
+In the host libraries both the temperature and PA5 ADC calls use `0xFFFF`
+as their error/unavailable sentinel.
 
 ## 6. Persist configuration to EEPROM
 

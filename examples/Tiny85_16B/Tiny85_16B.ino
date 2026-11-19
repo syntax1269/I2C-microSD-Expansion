@@ -2,7 +2,8 @@
 // 8.3 names only, one '/' max, 16 B cast-in-place chunks, static buffers.
 // Flow: create -> write 4x16 B (64 B) -> close -> size -> read -> verify -> remove.
 // Wire 85 to the module: PB0=SDA, PB2=SCL @ 100 kHz (fallback 50/25/10 kHz Sm).
-// Define -DTinyi2cStorage (see platformio.ini tiny envs / docs).
+// Build flag: -DTinyi2cStorage (PlatformIO: build_flags = -DTinyi2cStorage),
+// or add #define Tinyi2cStorage above the library include. Needs TinyWireM.
 #if !defined(Tinyi2cStorage)
 #error "Tiny85_16B needs #define Tinyi2cStorage before #include"
 #endif
@@ -22,7 +23,7 @@ void setup() {
   digitalWrite(1, LOW);  // off = began
 
   // create + write 4x16 B (64 B total), pattern b[i] = 0x40+i
-  File *w = openFile(&microSDexp, "T.BIN", "w");
+  MicroSDExpFile *w = openFile(&microSDexp, "T.BIN", "w");
   if (!w) {
     digitalWrite(1, HIGH);
     return;
@@ -49,7 +50,7 @@ void setup() {
   }
 
   // read back + verify byte-perfect
-  File *r = openFile(&microSDexp, "T.BIN", "r");
+  MicroSDExpFile *r = openFile(&microSDexp, "T.BIN", "r");
   if (!r) {
     digitalWrite(1, HIGH);
     return;

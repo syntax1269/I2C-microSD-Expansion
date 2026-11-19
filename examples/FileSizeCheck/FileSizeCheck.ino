@@ -17,7 +17,7 @@ void setup() {
   const uint8_t p1[] = {'H','E','L','L','O','-','1','2','3','4'};
   const uint8_t p2[] = {'+','A','P','P','E','N','D'};
 
-  File *w = openFile(&microSDexp, path, "w");
+  MicroSDExpFile *w = openFile(&microSDexp, path, "w");
   if (!w) {
     Serial.println(F("open \"w\" FAILED"));
     return;
@@ -25,7 +25,7 @@ void setup() {
   fileWrite(w, p1, sizeof(p1));
   fileClose(w);
 
-  File *a = openFile(&microSDexp, path, "a");
+  MicroSDExpFile *a = openFile(&microSDexp, path, "a");
   if (!a) {
     Serial.println(F("open \"a\" FAILED"));
     return;
@@ -43,7 +43,7 @@ void setup() {
     return;
   }
 
-  File *r = openFile(&microSDexp, path, "r");
+  MicroSDExpFile *r = openFile(&microSDexp, path, "r");
   if (!r) {
     Serial.println(F("open \"r\" FAILED"));
     return;

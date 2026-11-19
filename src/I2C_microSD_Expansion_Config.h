@@ -2,7 +2,8 @@
 #define I2C_MICROSD_EXPANSION_CONFIG_H
 // I2C_microSD_Expansion_Config.h — sketch knobs only. No MCU macros.
 // Timeout scaling: timeoutScaled = base x 100000/sclHz, >=2x below 50 kHz Sm.
-//   Bus-busy recovery and per-core Wire error table also land here / in protocol.h.
+//   Bus-busy recovery is opt-in via recoverBus(); per-core Wire error table
+//   also lands here / in protocol.h.
 
 #include <stdint.h>
 
@@ -54,6 +55,10 @@
 #undef I2CMICROSD_PATH_MAX
 #define I2CMICROSD_PATH_MAX 31
 #endif
+
+// Module-side bit-bang workspace size in bytes. The frame is clocked out from
+// this buffer, so a frame is at most 255 bytes (85 GRB pixels).
+#define I2CMICROSD_BITBANG_WORKSPACE 256
 
 // Bit-bang (WS2812B) frame payload per workspace write, in bytes. One write
 // is 1 command byte + 3 header bytes (offset LSB, offset MSB, length) +

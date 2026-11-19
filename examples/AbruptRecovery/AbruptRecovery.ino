@@ -8,7 +8,7 @@
 I2CmicroSD microSDexp;
 
 static bool smallRoundtrip(const char *path, uint32_t kLen) {
-  File *w = openFile(&microSDexp, path, "w");
+  MicroSDExpFile *w = openFile(&microSDexp, path, "w");
   if (!w) return false;
   uint8_t chunk[64];
   uint32_t sent = 0;
@@ -21,7 +21,7 @@ static bool smallRoundtrip(const char *path, uint32_t kLen) {
   }
   if (!fileClose(w)) ok = false;
   if (!ok) return false;
-  File *r = openFile(&microSDexp, path, "r");
+  MicroSDExpFile *r = openFile(&microSDexp, path, "r");
   if (!r) return false;
   uint8_t buf[128];
   uint32_t got = 0;
@@ -55,7 +55,7 @@ void setup() {
   snprintf(ex2Path, sizeof(ex2Path), "AbruptEx2_%lu.BIN", (unsigned long)((millis() / 1000) % 10000));
   (void)microSDexp.close();
   delay(100);
-  File *w = openFile(&microSDexp, exPath, "w");
+  MicroSDExpFile *w = openFile(&microSDexp, exPath, "w");
   if (!w) {
     Serial.println(F("open \"w\" FAILED"));
     return;

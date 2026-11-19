@@ -37,7 +37,7 @@ void setup() {
   const uint32_t kBytes = 65536;
   const char *path = "Example64K.BIN";
 
-  File *w = openFile(&microSDexp, path, "w");
+  MicroSDExpFile *w = openFile(&microSDexp, path, "w");
   if (!w) {
     Serial.println(F("open \"w\" FAILED"));
     return;
@@ -61,7 +61,7 @@ void setup() {
            (unsigned long)kBytes, (unsigned long)(millis() - t0));
   Serial.println(b);
 
-  File *r = openFile(&microSDexp, path, "r");
+  MicroSDExpFile *r = openFile(&microSDexp, path, "r");
   if (!r) {
     Serial.println(F("open \"r\" FAILED"));
     return;

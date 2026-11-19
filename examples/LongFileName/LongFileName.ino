@@ -11,7 +11,7 @@ static uint8_t lcgByte(uint32_t &seed) {
 }
 
 static bool roundtripOne(const char *path, uint32_t len, uint32_t seed) {
-  File *w = openFile(&microSDexp, path, "w");
+  MicroSDExpFile *w = openFile(&microSDexp, path, "w");
   if (!w) {
     char b[192];
     snprintf(b, sizeof(b), "  open \"w\" %s FAILED err=%d", path, (int)microSDexp.lastError());
@@ -31,7 +31,7 @@ static bool roundtripOne(const char *path, uint32_t len, uint32_t seed) {
   if (!fileClose(w)) ok = false;
   if (!ok) return false;
 
-  File *r = openFile(&microSDexp, path, "r");
+  MicroSDExpFile *r = openFile(&microSDexp, path, "r");
   if (!r) return false;
   uint32_t s2 = seed;
   uint8_t buf[128];

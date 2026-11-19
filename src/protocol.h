@@ -96,7 +96,7 @@ typedef struct {
 // 24-byte CARD_INFO frame (all LE).
 typedef struct {
   uint8_t  mounted;      // 1 = mounted, 0 = not
-  uint8_t  fatType;      // FAT type (e.g. 0=unknown, 1=FAT12, 2=FAT16, 3=FAT32)
+  uint8_t  fatType;      // SdFat fatType: 0=unmounted, 12=FAT12, 16=FAT16, 32=FAT32, 64=exFAT
   uint8_t  cardType;     // card type (e.g. 1=SDSC, 2=SDHC, ...)
   uint8_t  rsvd;         // reserved (0)
   uint32_t sectorCount;

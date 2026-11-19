@@ -26,7 +26,7 @@
 // PB2 (HW v3 header) or PB3.
 #define NEO_PIN MICROSDEXP_PIN_PA5
 #define NEO_COUNT 8  // pixels in your strip
-// Frame time (7 px ~ 210 us) plus the WS2812B latch reset (~300 us), rounded
+// Frame time (8 px ~ 256 us) plus the WS2812B latch reset (~300 us), rounded
 // up to whole milliseconds.
 #define FRAME_MS (2 + (NEO_COUNT * 32) / 1000)
 
@@ -65,9 +65,8 @@ void setup() {
     Serial.println(F("NeoPixelBlit: setPinMode FAILED (pin must be PA5, PB2 or PB3)"));
     return;
   }
-  // The mode change queues an EEPROM write on the module; the NVM write halts
-  // its CPU for a few ms, so give it room before the first frame.
-  delay(150);
+  // The mode change applies immediately in RAM - no EEPROM write happens
+  // here. Persistence is explicit: call savePINMode() once when final.
   // Zero the workspace: the module sends all buffered bytes, so a longer frame
   // from an earlier run would otherwise leave stale pixels behind this one.
   microSDexp.bitbangClear();

@@ -38,13 +38,15 @@
 //   upload is special→ the two-callback multipart streaming pair (see
 //                      handleUploadPiece/handleUploadPost comments).
 //
-// CIRUIT (breadboard or PCB, no external shifter — the module PCB level-
+// CIRCUIT (breadboard or PCB, no external shifter — the module PCB level-
 // shifts both sides: 3.3 V rail to the SD side, host 3.3/5 V logic accepted)
 //   ESP32 GPIO21 (SDA) ── PA2 (SDA)   module 0x6E
-//   ESP32 GPIO22 (SCL) ── PA3 (SCL)   no external pull-ups (none fitted, use host internal)
+//   ESP32 GPIO22 (SCL) ── PA3 (SCL)
 //   GND common, module powered from 5V OR 3.3V (one only, never both).
-//   microSDexp.begin(0x6E, 400000) below picks Fm; use 100000 for Sm or 1000000
-//   for Fm+. ATtiny85 Tinyi2cStorage is ≤100 kHz only (see docs/protocol.md).
+//   Pull-ups: 3.3k fitted on module (Fm+ sized); cut the underside trace
+//   if the host also supplies its own.
+//   g_microSDexp.begin(MICROSDEXP_ADDR, 1000000) below picks Fm+; use 400000
+//   for Fm or 100000 for Sm. ATtiny85 Tinyi2cStorage is ≤100 kHz only.
 //
 // CURL SMOKE TESTS (replace <ip> with the DHCP serial line)
 //   curl -s http://<ip>/api/version
@@ -79,8 +81,8 @@ static I2CmicroSD g_microSDexp;
 static WebServer g_server(80);
 
 // Upload streaming state: the ESP32 WebServer calls handleUploadPiece() once
-// per multipart chunk, so the open File* must live across callbacks.
-static File *g_upload = nullptr;
+// per multipart chunk, so the open MicroSDExpFile * must live across callbacks.
+static MicroSDExpFile *g_upload = nullptr;
 static bool g_upload_ok = false;
 static uint32_t g_upload_bytes = 0;
 
@@ -113,6 +115,79 @@ static void copyUri(char *dst, size_t cap) {
   }
   dst[n] = '\0';
 }
+
+
+// --- Output escaping -------------------------------------------------------
+// Filenames and DIR arguments come from the card or the request. Never place
+// them in HTML, attributes, JS literals or JSON without encoding first.
+static void htmlEscape(const char *src, char *dst, size_t cap) {
+  size_t o = 0;
+  if (cap == 0) return;
+  for (const char *p = src; *p && o + 6 < cap; ++p) {
+    switch (*p) {
+      case '&': memcpy(dst + o, "&amp;", 5); o += 5; break;
+      case '<': memcpy(dst + o, "&lt;", 4); o += 4; break;
+      case '>': memcpy(dst + o, "&gt;", 4); o += 4; break;
+      case '"': memcpy(dst + o, "&quot;", 6); o += 6; break;
+      case '\'': memcpy(dst + o, "&#39;", 5); o += 5; break;
+      default: dst[o++] = *p;
+    }
+  }
+  dst[o] = '\0';
+}
+
+// Percent-encode for href/query components and JavaScript string literals.
+static void urlEncode(const char *src, char *dst, size_t cap) {
+  static const char hex[] = "0123456789ABCDEF";
+  size_t o = 0;
+  if (cap == 0) return;
+  for (const char *p = src; *p && o + 3 < cap; ++p) {
+    unsigned char c = (unsigned char)*p;
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+        (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' ||
+        c == '~' || c == '/') {
+      dst[o++] = (char)c;
+    } else {
+      dst[o++] = '%';
+      dst[o++] = hex[c >> 4];
+      dst[o++] = hex[c & 0x0F];
+    }
+  }
+  dst[o] = '\0';
+}
+
+static void jsonEscape(const char *src, char *dst, size_t cap) {
+  size_t o = 0;
+  if (cap == 0) return;
+  for (const char *p = src; *p && o + 6 < cap; ++p) {
+    unsigned char c = (unsigned char)*p;
+    switch (c) {
+      case '"': memcpy(dst + o, "\\\"", 2); o += 2; break;
+      case '\\': memcpy(dst + o, "\\\\", 2); o += 2; break;
+      case '\n': memcpy(dst + o, "\\n", 2); o += 2; break;
+      case '\r': memcpy(dst + o, "\\r", 2); o += 2; break;
+      case '\t': memcpy(dst + o, "\\t", 2); o += 2; break;
+      case '<': memcpy(dst + o, "\\u003c", 6); o += 6; break;
+      case '>': memcpy(dst + o, "\\u003e", 6); o += 6; break;
+      case '&': memcpy(dst + o, "\\u0026", 6); o += 6; break;
+      default: dst[o++] = (char)c;
+    }
+  }
+  dst[o] = '\0';
+}
+
+// Distinct slots so several values can be escaped in one snprintf call.
+static char g_html[3][MAX_PATH];
+static char g_url[3][MAX_PATH];
+static char g_json[3][MAX_PATH];
+#define H1(s) htmlEscape((s), g_html[0], sizeof(g_html[0]))
+#define H2(s) htmlEscape((s), g_html[1], sizeof(g_html[1]))
+#define H3(s) htmlEscape((s), g_html[2], sizeof(g_html[2]))
+#define U1(s) urlEncode((s), g_url[0], sizeof(g_url[0]))
+#define U2(s) urlEncode((s), g_url[1], sizeof(g_url[1]))
+#define U3(s) urlEncode((s), g_url[2], sizeof(g_url[2]))
+#define J1(s) jsonEscape((s), g_json[0], sizeof(g_json[0]))
+#define J2(s) jsonEscape((s), g_json[1], sizeof(g_json[1]))
 
 static size_t boundedLen(const char *p) {
   size_t n = 0;
@@ -203,7 +278,7 @@ static void serveFile(const char *path, bool download) {
   }
   const char *mime = download ? "application/octet-stream" : mimeOf(path);
   uint32_t sz = g_microSDexp.fileSize(path);
-  File *f = openFile(&g_microSDexp, path, "r");
+  MicroSDExpFile *f = openFile(&g_microSDexp, path, "r");
   if (!f) {
     g_server.send(500, "text/plain", "open failed");
     return;
@@ -254,10 +329,10 @@ static const char kExampleList[] =
     "}</pre>";
 static const char kExampleWrite[] =
     "<pre>// Write + append (append is always legacy 0x04, never 0x21)\n"
-    "File* w = openFile(&amp;microSDexp, \"/LOG.TXT\", \"w\");\n"
+    "MicroSDExpFile * w = openFile(&amp;microSDexp, \"/LOG.TXT\", \"w\");\n"
     "fileWrite(w, (const uint8_t*)\"hello \", 6);\n"
     "fileClose(w);\n"
-    "File* a = openFile(&amp;microSDexp, \"/LOG.TXT\", \"a\");\n"
+    "MicroSDExpFile * a = openFile(&amp;microSDexp, \"/LOG.TXT\", \"a\");\n"
     "fileWrite(a, (const uint8_t*)\"again\\n\", 6);\n"
     "fileClose(a);</pre>";
 static const char kExampleQuery[] =
@@ -330,10 +405,10 @@ static void handleRoot() {
     joinPath(dir, g_entries[i].name, entry, sizeof(entry));
     int k = g_entries[i].isDir ? snprintf(table + tn, sizeof(table) - (size_t)tn,
                                           "<tr><td>[D]</td><td><a href='/listSDCard?DIR=%s'>%s/</a></td><td>---</td></tr>",
-                                          entry, g_entries[i].name)
+                                          U1(entry), H2(g_entries[i].name))
                                : snprintf(table + tn, sizeof(table) - (size_t)tn,
                                           "<tr><td>[F]</td><td><a href='/download?file=%s'>%s</a></td><td>%lu</td></tr>",
-                                          entry, g_entries[i].name,
+                                          U1(entry), H2(g_entries[i].name),
                                           (unsigned long)g_entries[i].size);
     if (k <= 0) break;
     tn += k;
@@ -474,13 +549,13 @@ static void handleList() {
                    "<h2 style='margin:0'>%s</h2>"
                    "<input id=q placeholder='Search in this folder…' style='max-width:260px'>"
                    "</div><div class=crumbs id=crumbs></div>",
-                   dir, kCss, dir, dir);
+                   H1(dir), kCss, H2(dir), H3(dir));
   if (n < 0) n = 0;
   char parent[MAX_PATH];
   dirOf(dir, parent, sizeof(parent));
   if (!(dir[0] == '/' && dir[1] == '\0')) {
     snprintf(html + n, sizeof(html) - (size_t)n,
-             "<p><a href='/listSDCard?DIR=%s'>&#8592; Up</a></p>", parent);
+             "<p><a href='/listSDCard?DIR=%s'>&#8592; Up</a></p>", U1(parent));
   }
   n += (int)strlen(html + n);
   uint8_t total = g_microSDexp.listDir(dir, g_entries, MAX_ENTRIES);
@@ -501,13 +576,13 @@ static void handleList() {
       if (g_entries[i].isDir) {
         snprintf(row, sizeof(row),
                  "<tr><td>[D]</td><td>---</td><td><a href='./listSDCard?DIR=%s'>%s/</a></td><td>---</td></tr>",
-                 entry, g_entries[i].name);
+                 U1(entry), H2(g_entries[i].name));
       } else {
         snprintf(row, sizeof(row),
                  "<tr><td>[F]</td><td><form method='POST' action='/deleteFile' style='display:inline'>"
                  "<input type='hidden' name='file' value='%s'><button>Del</button></form></td>"
                  "<td><a href='/download?file=%s'>%s</a></td><td>%lu</td></tr>",
-                 entry, entry, g_entries[i].name, (unsigned long)g_entries[i].size);
+                 U1(entry), H2(entry), H3(g_entries[i].name), (unsigned long)g_entries[i].size);
       }
       snprintf(html + n, sizeof(html) - (size_t)n, "%s", row);
       n += (int)strlen(html + n);
@@ -532,7 +607,7 @@ static void handleList() {
            "const f=e.dataTransfer.files[0];if(!f)return;const fd=new FormData();fd.append('file',f);fd.append('dest','%s');"
            "const r=await fetch('/upload',{method:'POST',body:fd});const t=await r.text();alert(t);});"
            "</script></body></html>",
-           page, totalPages, dir, dir, dir);
+           page, totalPages, H1(dir), H2(dir), U1(dir));
   g_server.send(200, "text/html", html);
 }
 
@@ -553,7 +628,7 @@ static void handleDelete() {
     static char parent[MAX_PATH];
     dirOf(path, parent, sizeof(parent));
     static char loc[300];
-    snprintf(loc, sizeof(loc), "/listSDCard?DIR=%s", parent);
+    snprintf(loc, sizeof(loc), "/listSDCard?DIR=%s", U1(parent));
     g_server.sendHeader("Location", loc, true);
     g_server.send(303, "text/plain", "");
   } else {
@@ -573,7 +648,7 @@ static void handleMkdir() {
   }
   if (g_microSDexp.mkdir(dir)) {
     static char loc[300];
-    snprintf(loc, sizeof(loc), "/listSDCard?DIR=%s", dir);
+    snprintf(loc, sizeof(loc), "/listSDCard?DIR=%s", U1(dir));
     g_server.sendHeader("Location", loc, true);
     g_server.send(303, "text/plain", "");
   } else {
@@ -593,7 +668,7 @@ static void handleRmdir() {
     static char parent[MAX_PATH];
     dirOf(dir, parent, sizeof(parent));
     static char loc[300];
-    snprintf(loc, sizeof(loc), "/listSDCard?DIR=%s", parent);
+    snprintf(loc, sizeof(loc), "/listSDCard?DIR=%s", U1(parent));
     g_server.sendHeader("Location", loc, true);
     g_server.send(303, "text/plain", "");
   } else {
@@ -611,7 +686,7 @@ static void handleAppend() {
     g_server.send(400, "text/plain", "Missing file argument");
     return;
   }
-  File *a = openFile(&g_microSDexp, path, "a");
+  MicroSDExpFile *a = openFile(&g_microSDexp, path, "a");
   if (!a) {
     g_server.send(500, "text/plain", "append open failed");
     return;
@@ -622,7 +697,7 @@ static void handleAppend() {
   g_server.send(ok ? 200 : 500, "text/plain", ok ? "appended" : "append failed");
 }
 
-// --- Upload (multipart streaming): two callbacks, one File, no buffering ---
+// --- Upload (multipart streaming): two callbacks, one open handle, no buffering ---
 // ESP32 WebServer delivers the body as a sequence of UPLOAD_FILE_* chunks.
 // START opens the module file (openFile "w" truncates — the GUI's upload
 // never appends), WRITE streams bytes as they arrive (fileWrite flow-paces
@@ -711,7 +786,7 @@ static void handleNotFound() {
     return;
   }
   char row[512];
-  snprintf(row, sizeof(row), "Not found: %s\nMethod: %s\nArgs: %d", uri,
+  snprintf(row, sizeof(row), "Not found: %s\nMethod: %s\nArgs: %d", H1(uri),
            g_server.method() == HTTP_GET ? "GET" : "POST", (int)g_server.args());
   g_server.send(404, "text/html", row);
 }
@@ -739,7 +814,7 @@ static void handleApiVersion() {
     return;
   }
   char b[64];
-  snprintf(b, sizeof(b), "{\"version\":\"%s\"}", v);
+  snprintf(b, sizeof(b), "{\"version\":\"%s\"}", J1(v));
   g_server.send(200, "application/json", b);
 }
 
@@ -777,7 +852,7 @@ static void handleApiSize() {
   char path[MAX_PATH];
   copyArg("file", path, sizeof(path));
   char b[320];
-  snprintf(b, sizeof(b), "{\"file\":\"%s\",\"size\":%lu,\"exists\":%d}", path,
+  snprintf(b, sizeof(b), "{\"file\":\"%s\",\"size\":%lu,\"exists\":%d}", J1(path),
            (unsigned long)g_microSDexp.fileSize(path),
            g_microSDexp.exists(path) ? 1 : 0);
   g_server.send(200, "application/json", b);
@@ -787,7 +862,7 @@ static void handleApiExists() {
   char path[MAX_PATH];
   copyArg("file", path, sizeof(path));
   char b[320];
-  snprintf(b, sizeof(b), "{\"file\":\"%s\",\"exists\":%d,\"isDirectory\":%d}", path,
+  snprintf(b, sizeof(b), "{\"file\":\"%s\",\"exists\":%d,\"isDirectory\":%d}", J1(path),
            g_microSDexp.exists(path) ? 1 : 0,
            g_microSDexp.isDirectory(path) ? 1 : 0);
   g_server.send(200, "application/json", b);
@@ -802,12 +877,12 @@ static void handleApiList() {
   }
   uint8_t n = g_microSDexp.listDir(dir, g_entries, MAX_ENTRIES);
   static char out[2048];
-  int m = snprintf(out, sizeof(out), "{\"dir\":\"%s\",\"count\":%u,\"entries\":[", dir, n);
+  int m = snprintf(out, sizeof(out), "{\"dir\":\"%s\",\"count\":%u,\"entries\":[", J1(dir), n);
   if (m < 0) m = 0;
   for (uint8_t i = 0; i < n; i++) {
     int k = snprintf(out + m, sizeof(out) - (size_t)m,
                      "%s{\"isDir\":%s,\"name\":\"%s\",\"size\":%lu}", i ? "," : "",
-                     g_entries[i].isDir ? "true" : "false", g_entries[i].name,
+                     g_entries[i].isDir ? "true" : "false", J2(g_entries[i].name),
                      (unsigned long)g_entries[i].size);
     if (k <= 0) break;
     m += k;

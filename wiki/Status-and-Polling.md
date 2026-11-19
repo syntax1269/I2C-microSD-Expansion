@@ -49,7 +49,11 @@ correct pattern is:
 4. inspect state and error
 ```
 
-Compare with **inequality**, never `>`: the counter wraps from 255 to 0.
+Compare with **inequality**, never `>`: the counter wraps from 255 to 0. Never
+substitute `0` for a failed pre-read — any nonzero `opDone` from an unrelated
+earlier operation would satisfy `opDone != 0` instantly. The Arduino library
+retries the pre-read a bounded number of times and fails with `NO_MODULE` if it
+never succeeds.
 
 ```python
 def wait_done(prev, timeout_ms=15000, poll_ms=2):

@@ -32,6 +32,9 @@ One file is open at a time by design. `close()` and `sync()` return only after t
 bytes are committed to the card, so a sudden power-off cannot leave a half-written
 file.
 
+Not reentrant or interrupt-safe: use one instance from one call site. The single
+file handle and shared staging buffer are not protected against nested calls.
+
 ---
 
 ## Requirements
@@ -128,6 +131,8 @@ void loop() {}
 
 The default address is `0x6E` and the default bus speed is 400 kHz. Speeds of
 100 kHz, 400 kHz, and 1 MHz are supported: `microSDexp.begin(0x6E, 1000000)`.
+`microSDexp.address()` returns the address `begin()` actually bound, so you can
+detect a validated fallback from a re-addressed module.
 
 ---
 
@@ -163,7 +168,7 @@ retries instead of dropping bytes. `read()` returns `0` at end of file.
 **C-style file API** (useful when you want a file handle):
 
 ```cpp
-File *f = openFile(&microSDexp, "TEST.TXT", "w");
+MicroSDExpFile *f = openFile(&microSDexp, "TEST.TXT", "w");
 fileWrite(f, buf, len);
 fileClose(f);
 ```
@@ -201,8 +206,8 @@ if (microSDexp.cardInfo(&info)) {
 
 char v[32];
 microSDexp.version(v, sizeof(v));        // e.g. "18.8.22"
-uint16_t t = microSDexp.temperatureK();  // whole kelvin, e.g. 294 ≈ 21 °C
-uint16_t a = microSDexp.adcPA5();        // 0xFFFF = unavailable
+uint16_t t = microSDexp.temperatureK();  // whole kelvin; 0xFFFF on error
+uint16_t a = microSDexp.adcPA5();        // 0xFFFF on error/unavailable
 ```
 
 `cardInfo().sckHz` is the negotiated card SPI clock; it is the best predictor of
@@ -211,6 +216,8 @@ throughput (see [Performance tips](#performance-tips)).
 `temperatureK()` returns the module die temperature as a 2-byte little-endian
 **integer in kelvin**, rounded to whole K (for example `294` ≈ 21 °C). It is not an
 ADC count and has no fractional scaling; subtract 273.15 to get °C.
+Both `temperatureK()` and `adcPA5()` return `0xFFFF` on any failure —
+bus error, short read, or unavailable ADC channel — so check for it.
 
 ### Expansion pins
 
@@ -299,6 +306,14 @@ if (microSDexp.lastError() != MICROSDEXP_OK) {
   Serial.printf("error %d\r\n", (int)microSDexp.lastError());
 }
 if (microSDexp.fileOpen()) microSDexp.close();
+if (microSDexp.stickyError() != MICROSDEXP_OK) { /* real fault */ }
+microSDexp.clearError();   // start a fresh error window
+`lastError()` is the result of the *most recent* call and may be overwritten by
+internal calls (for example, a `listDir()` drain). Use `stickyError()` for the
+first failure since `clearError()` when you need an error that internal traffic
+cannot hide. `version()` returns `0` with `MICROSDEXP_INVALID` when the caller's
+buffer is too small to reach the dotted version token in the banner.
+
 ```
 
 | Code | Meaning |

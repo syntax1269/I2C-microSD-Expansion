@@ -23,6 +23,17 @@ static uint8_t g_shared[32];
 static uint8_t g_shared[128];
 #endif
 
+// Cheap dotted-token test for the CMD_VERSION answer; avoids string.h.
+static bool hasVersionToken(const char *s) {
+  bool dot = false;
+  bool digit = false;
+  for (; *s; ++s) {
+    if (*s == '.') dot = true;
+    if (*s >= '0' && *s <= '9') digit = true;
+  }
+  return dot && digit;
+}
+
 I2CmicroSD::I2CmicroSD()
     : _addr(I2CMICROSD_DEFAULT_ADDRESS),
       _sclHz(0),
@@ -43,6 +54,10 @@ I2CmicroSD::I2CmicroSD()
   }
 }
 
+uint8_t I2CmicroSD::address() const {
+  return _addr;
+}
+
 void I2CmicroSD::setPollInterval(uint16_t ms) {
   _pollMs = ms;
 }
@@ -59,6 +74,15 @@ size_t I2CmicroSD::readChunkBytes() const {
 
 MicroSDExpError I2CmicroSD::lastError() const {
   return _lastError;
+}
+
+MicroSDExpError I2CmicroSD::stickyError() const {
+  return _lastError.sticky;
+}
+
+void I2CmicroSD::clearError() {
+  _lastError = MICROSDEXP_OK;
+  _lastError.sticky = MICROSDEXP_OK;
 }
 
 bool I2CmicroSD::fileOpen() const {
@@ -153,9 +177,27 @@ uint32_t I2CmicroSD::scaleTimeout(uint32_t base) const {
   return (uint32_t)scaled;
 }
 
+// Best-effort bus recovery. NOT called by begin(): these are I2C general-call
+// writes to 0x00, which other slaves may answer and some cores reject outright.
+// A real 9-clock + STOP recovery needs direct SDA/SCL pin control that Wire
+// cannot express; begin()'s read-only address probe already clears the common
+// stuck-bus case. Call this explicitly only when you know the bus is stuck.
+void I2CmicroSD::recoverBus() {
+  for (uint8_t i = 0; i < 9; i++) {
+    I2C_BUS.beginTransmission(0x00);
+    I2C_BUS.endTransmission(true);
+  }
+}
+
 bool I2CmicroSD::begin(uint8_t address, uint32_t clockHz) {
   _addr = address;
   _sclHz = clockHz;
+
+  // A re-begin may follow a module power cycle or reconnect: the module's RAM
+  // pin modes are unknown again, so invalidate the dedup cache.
+  for (int i = 0; i < 8; i++) {
+    _pinLastMode[i] = 0xFF;
+  }
 
   if (!_wireBegun) {
     // Pin selection is owned by the sketch: call Wire.begin(sda,scl) before
@@ -172,14 +214,6 @@ bool I2CmicroSD::begin(uint8_t address, uint32_t clockHz) {
   }
 #endif
 
-  // Bus-busy recovery stub: 9 x dummy transactions. Full 9-clock + STOP
-  // (USI equivalent) is not expressible via Wire alone; the
-  // address probe below absorbs the realistic stuck-bus case on ESP32.
-  for (uint8_t i = 0; i < 9; i++) {
-    I2C_BUS.beginTransmission(0x00);
-    I2C_BUS.endTransmission(true);
-  }
-
   // Address scan probe: configured address first, then 0x6A-0x6F (I2C_SET_ADDR
   // live range per wiring doc). Keeps sketches honest about the default 0x6E.
   StatusFrame st;
@@ -187,14 +221,25 @@ bool I2CmicroSD::begin(uint8_t address, uint32_t clockHz) {
     _lastError = MICROSDEXP_OK;
     return true;
   }
+  // Fallback for re-addressed modules only. A bare 12-byte STATUS reply is not
+  // enough to adopt an address: require a rev-2 STATUS frame with bounded
+  // state/error, and (in builds with the version API) a dotted version token.
   for (uint8_t addr = 0x6A; addr <= 0x6F; addr++) {
     if (addr == address) continue;
     uint8_t saved = _addr;
     _addr = addr;
-    if (readStatus(st)) {
-      _addr = addr;
+    bool plausible = readStatus(st) && st.rev == 2 &&
+                     st.state <= MICROSDEXP_ST_OVERFLOW &&
+                     st.error <= MICROSDEXP_ERR_OVERFLOW;
+#if !defined(Tinyi2cStorage) && !defined(I2CSDMODULE_MINIMAL)
+    if (plausible) {
+      char ver[I2CMICROSD_VERSION_BANNER_BYTES];
+      plausible = version(ver, sizeof(ver)) > 0 && hasVersionToken(ver);
+    }
+#endif
+    if (plausible) {
       _lastError = MICROSDEXP_OK;
-      return true;
+      return true;                     // _addr stays on the confirmed address
     }
     _addr = saved;
   }
@@ -220,6 +265,21 @@ bool I2CmicroSD::readStatus(StatusFrame &out) {
   return true;
 }
 
+// Bounded pre-read of opDone. Every wait loop captures the completion
+// counter BEFORE submitting its command; a failed read must never fall back
+// to 0, because any nonzero opDone would then look like a fresh completion.
+bool I2CmicroSD::readOpDone(uint8_t &opDone) {
+  StatusFrame st;
+  for (int i = 0; i < 4; i++) {
+    if (readStatus(st)) {
+      opDone = st.opDone;
+      return true;
+    }
+    if (i < 3) delay(_pollMs);
+  }
+  _lastError = MICROSDEXP_NO_MODULE;
+  return false;
+}
 int I2CmicroSD::waitForOpComplete(uint8_t doneBefore, uint32_t timeoutMs) {
   uint32_t start = millis();
   uint32_t limit = scaleTimeout(timeoutMs);
@@ -262,8 +322,8 @@ bool I2CmicroSD::waitForCommitted(uint32_t target, uint32_t timeoutMs) {
 // ---- Async file core ----------
 
 bool I2CmicroSD::barrierCloseFlush() {
-  StatusFrame st;
-  uint8_t db = readStatus(st) ? st.opDone : 0;
+  uint8_t db = 0;
+  if (!readOpDone(db)) return false;
   uint8_t err = sendCmd(MICROSDEXP_CMD_CLOSE_FLUSH, nullptr, 0, true);
   if (err != 0) return false;
   return waitForOpComplete(db, I2CMICROSD_OP_TIMEOUT_MS) == 0;
@@ -358,8 +418,8 @@ bool I2CmicroSD::submitFilename(const char *path) {
 // Legacy sync op: doneBefore -> 0x01 -> cmd ->
 // waitForOpComplete -> STATUS.result latch read after completion.
 int I2CmicroSD::legacyOp(uint8_t cmd, const char *path, uint32_t *resultOut) {
-  StatusFrame before;
-  uint8_t doneBefore = readStatus(before) ? before.opDone : 0;
+  uint8_t doneBefore = 0;
+  if (!readOpDone(doneBefore)) { if (resultOut) *resultOut = 0; return 102; }
   if (!submitFilename(path)) return 100;
   if (sendCmd(cmd, nullptr, 0, true) != 0) return 101;
   int err = waitForOpComplete(doneBefore, I2CMICROSD_OP_TIMEOUT_MS);
@@ -470,9 +530,11 @@ uint8_t I2CmicroSD::version(char *buf, uint8_t buflen) {
       return (uint8_t)len;
     }
   }
-  // No dotted token (legacy short answer, or the caller's buffer was too
-  // small to reach the version line): return the text verbatim.
-  return n;
+  // No dotted token: the buffer was too small to reach the version line
+  // (or the answer was malformed). Return 0 with INVALID rather than a
+  // raw banner fragment such as the first-line clock value.
+  _lastError = MICROSDEXP_INVALID;
+  return 0;
 }
 
 uint32_t I2CmicroSD::firmwareClockHz() {
@@ -500,11 +562,11 @@ uint16_t I2CmicroSD::temperatureK() {
   uint8_t err = sendCmd(MICROSDEXP_CMD_TEMP_READ, nullptr, 0, false);
   if (err != 0) {
     _lastError = normalizeWire(err);
-    return 0;
+    return 0xFFFF;
   }
   if (receiveBytes(g_shared, 2) < 2) {
     _lastError = MICROSDEXP_INVALID;
-    return 0;
+    return 0xFFFF;
   }
   _lastError = MICROSDEXP_OK;
   return (uint16_t)g_shared[0] | ((uint16_t)g_shared[1] << 8);
@@ -514,11 +576,11 @@ uint16_t I2CmicroSD::adcPA5() {
   uint8_t err = sendCmd(MICROSDEXP_CMD_ADC_READ_PA5, nullptr, 0, false);
   if (err != 0) {
     _lastError = normalizeWire(err);
-    return 0;
+    return 0xFFFF;
   }
   if (receiveBytes(g_shared, 3) < 2) {
     _lastError = MICROSDEXP_INVALID;
-    return 0;
+    return 0xFFFF;
   }
   // 0xFF/0xFF marks an unavailable channel on this part.
   if (g_shared[0] == 0xFF && g_shared[1] == 0xFF) {
@@ -574,8 +636,8 @@ bool I2CmicroSD::format(uint8_t mode) {
     return false;
   }
   // Explicit-only (no token); guards live in sketch/UI.
-  StatusFrame before;
-  uint8_t doneBefore = readStatus(before) ? before.opDone : 0;
+  uint8_t doneBefore = 0;
+  if (!readOpDone(doneBefore)) return false;
   g_shared[0] = mode;
   if (sendCmd(MICROSDEXP_CMD_FORMAT, g_shared, 1, true) != 0) return false;
   int err = waitForOpComplete(doneBefore, I2CMICROSD_FORMAT_TIMEOUT_MS);
@@ -596,8 +658,8 @@ uint8_t I2CmicroSD::listDir(const char *path, DirEntry *out, uint8_t outCap) {
     if (!path) _lastError = MICROSDEXP_INVALID;
     return 0;
   }
-  StatusFrame before;
-  uint8_t doneBefore = readStatus(before) ? before.opDone : 0;
+  uint8_t doneBefore = 0;
+  if (!readOpDone(doneBefore)) return 0;
   if (!submitFilename(path)) return 0;
   if (sendCmd(MICROSDEXP_CMD_LIST_DIR, nullptr, 0, true) != 0) return 0;
   int opErr = waitForOpComplete(doneBefore, I2CMICROSD_OP_TIMEOUT_MS);
@@ -758,8 +820,9 @@ bool I2CmicroSD::bitbangBuffer(uint16_t offset, const uint8_t *data, uint8_t len
     _lastError = MICROSDEXP_INVALID;
     return false;
   }
-  // The offset field is 16 bit: the written range must be addressable.
-  if ((uint32_t)offset + (uint32_t)len > 0xFFFFUL) {
+  // The module's workspace is 256 bytes. Reject out-of-range writes locally
+  // instead of relying on the module to NACK or silently drop the extra bytes.
+  if ((uint32_t)offset + (uint32_t)len > I2CMICROSD_BITBANG_WORKSPACE) {
     _lastError = MICROSDEXP_INVALID;
     return false;
   }
@@ -801,7 +864,7 @@ bool I2CmicroSD::showNeoPixels(uint8_t pin, const uint8_t *grb, uint16_t pixelCo
     return false;
   }
   uint32_t bytes = (uint32_t)pixelCount * 3u;  // 3 bytes per pixel (GRB)
-  if (bytes > 255u * 3u) {                   // frame length field is 1 byte
+  if (bytes > 255u) {                        // frame length field is 1 byte
     _lastError = MICROSDEXP_INVALID;
     return false;
   }
@@ -835,11 +898,14 @@ bool I2CmicroSD::setPinMode(uint8_t pin, uint8_t mode) {
   if ((pin < 8) && (_pinLastMode[pin] == mode)) {
     return true;
   }
+  g_shared[0] = mode;
+  if (sendCmd(cmd, g_shared, 1, true) != 0) return false;
+  // Cache only a confirmed ACK. A NACK (busy bit-bang engine, bus glitch,
+  // module rebooting) must leave the cache alone so the next call retries.
   if (pin < 8) {
     _pinLastMode[pin] = mode;
   }
-  g_shared[0] = mode;
-  return sendCmd(cmd, g_shared, 1, true) == 0;
+  return true;
 }
 
 // Persist the currently-configured pin modes + I2C address to the module's
@@ -885,8 +951,8 @@ bool I2CmicroSD::openAppend(const char *path) {
 
 // One legacy append chunk: 0x01 path + 0x04 + payload (≤64 B), atomic.
 bool I2CmicroSD::appendChunk(const uint8_t *data, size_t len) {
-  StatusFrame before;
-  uint8_t doneBefore = readStatus(before) ? before.opDone : 0;
+  uint8_t doneBefore = 0;
+  if (!readOpDone(doneBefore)) return false;
   if (!submitFilename(_appendPath)) return false;
   if (sendCmd(MICROSDEXP_CMD_APPEND_FILE, data, len, true) != 0) return false;
   int err = waitForOpComplete(doneBefore, I2CMICROSD_OP_TIMEOUT_MS);
@@ -903,8 +969,8 @@ bool I2CmicroSD::openWrite(const char *path) {
   _appendMode = false;
   for (int attempt = 0; attempt < 6; attempt++) {
     (void)barrierCloseFlush();
-    StatusFrame before;
-    uint8_t doneBefore = readStatus(before) ? before.opDone : 0;
+    uint8_t doneBefore = 0;
+    if (!readOpDone(doneBefore)) return false;
 
     I2C_BUS.beginTransmission(_addr);
     I2C_BUS.write(MICROSDEXP_CMD_OPEN_WRITE);
@@ -947,7 +1013,8 @@ bool I2CmicroSD::openRead(const char *path) {
   for (int attempt = 0; attempt < 6; attempt++) {
     (void)barrierCloseFlush();
     StatusFrame before;
-    uint8_t doneBefore = readStatus(before) ? before.opDone : 0;
+    uint8_t doneBefore = 0;
+    if (!readOpDone(doneBefore)) return false;
 
     I2C_BUS.beginTransmission(_addr);
     I2C_BUS.write(MICROSDEXP_CMD_OPEN_READ);
@@ -1101,8 +1168,7 @@ size_t I2CmicroSD::read(uint8_t *buf, size_t len) {
     delay(_pollMs);
   }
   _lastError = MICROSDEXP_OK;
-  _written = (uint32_t)got;
-  return got;
+  return got;                       // read length is the return value; _written is write-only
 }
 
 bool I2CmicroSD::sync() {
@@ -1127,8 +1193,12 @@ bool I2CmicroSD::close() {
     return true;
   }
   bool ok = sync();
-  StatusFrame st;
-  uint8_t db = readStatus(st) ? st.opDone : 0;
+  uint8_t db = 0;
+  if (!readOpDone(db)) {
+    _fileOpen = false;
+    _readStarted = false;
+    return false;
+  }
   uint8_t err = sendCmd(MICROSDEXP_CMD_CLOSE_FLUSH, nullptr, 0, true);
   if (err != 0) {
     _lastError = MICROSDEXP_CARD_ERR;
@@ -1150,7 +1220,7 @@ bool I2CmicroSD::close() {
 
 // ---- File API (extern "C") ----------
 
-extern "C" File *openFile(I2CmicroSD *b, const char *path, const char *mode) {
+extern "C" MicroSDExpFile *openFile(I2CmicroSD *b, const char *path, const char *mode) {
   if (!b || !path || !mode) return nullptr;
   char m = mode[0];
   bool ok = false;
@@ -1179,26 +1249,26 @@ extern "C" File *openFile(I2CmicroSD *b, const char *path, const char *mode) {
   return &gActiveFile;
 }
 
-extern "C" size_t fileWrite(File *f, const uint8_t *buf, size_t len) {
+extern "C" size_t fileWrite(MicroSDExpFile *f, const uint8_t *buf, size_t len) {
   if (!f || !f->open || !f->microSDexp) return 0;
   size_t n = f->microSDexp->write(buf, len);
   f->error = (n == len) ? 0 : (uint8_t)f->microSDexp->lastError();
   return n;
 }
 
-extern "C" size_t fileRead(File *f, uint8_t *buf, size_t len) {
+extern "C" size_t fileRead(MicroSDExpFile *f, uint8_t *buf, size_t len) {
   if (!f || !f->open || !f->microSDexp) return 0;
   size_t n = f->microSDexp->read(buf, len);
   f->error = (uint8_t)f->microSDexp->lastError();
   return n;
 }
 
-extern "C" bool fileSync(File *f) {
+extern "C" bool fileSync(MicroSDExpFile *f) {
   if (!f || !f->open || !f->microSDexp) return false;
   return f->microSDexp->sync();
 }
 
-extern "C" bool fileClose(File *f) {
+extern "C" bool fileClose(MicroSDExpFile *f) {
   if (!f || !f->open || !f->microSDexp) return false;
   bool ok = f->microSDexp->close();
   f->open = 0;

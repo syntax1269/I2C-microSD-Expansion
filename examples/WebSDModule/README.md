@@ -3,6 +3,10 @@
 An ESP32 Wi-Fi file explorer backed by the module. Open the serial console to
 read the URL the board obtained via DHCP, then browse to it in a web browser.
 
+> **Security:** this demo has no authentication and is intended for a
+> trusted LAN only. Dynamic filenames and `DIR` arguments are HTML-, URL-
+> and JSON-escaped before rendering, but the endpoints themselves are open.
+
 Features:
 
 - list files and directories on the card,
