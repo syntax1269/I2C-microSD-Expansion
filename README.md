@@ -201,12 +201,16 @@ if (microSDexp.cardInfo(&info)) {
 
 char v[32];
 microSDexp.version(v, sizeof(v));        // e.g. "18.8.22"
-uint16_t t = microSDexp.temperatureK();  // raw die temperature
+uint16_t t = microSDexp.temperatureK();  // whole kelvin, e.g. 294 ≈ 21 °C
 uint16_t a = microSDexp.adcPA5();        // 0xFFFF = unavailable
 ```
 
 `cardInfo().sckHz` is the negotiated card SPI clock; it is the best predictor of
 throughput (see [Performance tips](#performance-tips)).
+
+`temperatureK()` returns the module die temperature as a 2-byte little-endian
+**integer in kelvin**, rounded to whole K (for example `294` ≈ 21 °C). It is not an
+ADC count and has no fractional scaling; subtract 273.15 to get °C.
 
 ### Expansion pins
 
@@ -214,12 +218,23 @@ throughput (see [Performance tips](#performance-tips)).
 #include <I2C_microSD_Expansion.h>
 // Pin IDs: MICROSDEXP_PIN_PA5 (5), MICROSDEXP_PIN_PB2 (2), MICROSDEXP_PIN_PB3 (3)
 
-microSDexp.setPinMode(MICROSDEXP_PIN_PB2, 0);  // 0 = digital output
-microSDexp.writePin(MICROSDEXP_PIN_PB2, 1);    // drive high
-microSDexp.writePin(MICROSDEXP_PIN_PB2, 0);    // drive low
+microSDexp.setPinMode(MICROSDEXP_PIN_PB2, 0);  // mode 0 = digital output
+microSDexp.writePin(MICROSDEXP_PIN_PB2, 1);    // level 1 = high
+microSDexp.writePin(MICROSDEXP_PIN_PB2, 0);    // level 0 = low
 
 uint16_t adc = microSDexp.adcPA5();            // PA5's 12-bit ADC input
 ```
+
+The literal values are the module's protocol values; the library does not define
+named aliases for them:
+
+| Call | Value | Meaning |
+|---|---|---|
+| `setPinMode(pin, 0)` | `0` | Digital output — the only mode this library uses |
+| `writePin(pin, 0)` | `0` | Drive the output low |
+| `writePin(pin, 1)` | `1` | Drive the output high (any nonzero value means high) |
+| `format(0)` | `0` | **Automatic** — keep the card's existing FAT type |
+| `format(1)` | `1` | Force a FAT rebuild |
 
 Modes apply **immediately in RAM** and the module never writes EEPROM on a mode
 change. When your configuration is final, persist it once:
@@ -236,7 +251,7 @@ strip[0] = 0;    // G
 strip[1] = 40;   // R
 strip[2] = 0;    // B
 
-microSDexp.setPinMode(MICROSDEXP_PIN_PA5, 0);  // pin must be an output
+microSDexp.setPinMode(MICROSDEXP_PIN_PA5, 0);  // 0 = digital output (required)
 microSDexp.bitbangClear();                     // clear any longer earlier frame
 microSDexp.showNeoPixels(MICROSDEXP_PIN_PA5, strip, 8);
 delay(3);                                      // keep the bus quiet while it latches
@@ -269,12 +284,13 @@ set (`SET_HIGH`, `SET_LOW`, `DELAY_US`, `DELAY_MS`, `LOOP_GOTO`).
 
 ```cpp
 microSDexp.setClockTime(2026, 11, 18, 12, 0, 0);  // set module clock
-microSDexp.format(0);                              // DESTRUCTIVE: full card format
+microSDexp.format(0 /* automatic */);               // DESTRUCTIVE: full card format
 microSDexp.reboot();                               // reboot the module
 ```
 
 `format()` rebuilds the FAT and can take tens of seconds; it uses its own 300 s
-timeout, not the 15 s operation timeout.
+timeout, not the 15 s operation timeout. Mode `0` is automatic (the module keeps the
+card's current FAT type); mode `1` forces a FAT rebuild.
 
 ### Error handling
 

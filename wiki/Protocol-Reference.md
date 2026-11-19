@@ -85,7 +85,7 @@ read; "W" means it is followed by a payload write.
 | `0x14` | `PB3_SET_MODE` | W | 1 B mode |
 | `0x15` | `PB3_CONTROL` | W | Mode-dependent control value |
 | `0x16` | `I2C_SET_ADDR` | W | 1 B new address (`0x6A`–`0x6F`) |
-| `0x17` | `TEMP_READ` | R | Raw die-temperature word |
+| `0x17` | `TEMP_READ` | R | 2-byte integer Kelvin (LE), rounded to whole K |
 | `0x18` | `ADC_READ_PA5` | R | 12-bit ADC word |
 | `0x19` | `ADC_READ_PB3` | R | Always `0xFF` — PB3 has no ADC on this part |
 | `0x1A` | `SAVEEEPROM` | W | No payload; persist pin modes + I²C address |

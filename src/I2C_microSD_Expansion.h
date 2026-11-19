@@ -74,7 +74,7 @@ class I2CmicroSD {
   uint8_t version(char *buf, uint8_t buflen);         // module version string
   uint8_t firmwareBanner(char *buf, uint8_t buflen);  // full CMD_VERSION answer (banner on >=18.8)
   uint32_t firmwareClockHz();                         // measured clock from banner (0 when absent)
-  uint16_t temperatureK();                            // die temperature raw
+  uint16_t temperatureK();                            // die temperature, whole kelvin (LE)
   uint16_t adcPA5();                                  // PA5 ADC raw (0xFFFF = n/a)
   bool cardInfo(CardInfo *out);                       // card/volume snapshot
   void setClockTime(uint8_t y, uint8_t mo, uint8_t d, uint8_t h, uint8_t mi, uint8_t s);

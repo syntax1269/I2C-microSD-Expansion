@@ -82,8 +82,10 @@ R [0x18] -> adc_word (LE)         # 0..4095, or 0xFFFF if unavailable
 
 ## 5. Temperature
 
-`R [0x17] -> raw die-temperature word`. The host libraries expose this as
-`temperature_k()`; convert to Celsius with your board's calibration if needed.
+`R [0x17] -> 2-byte integer Kelvin (LE)`. This is the module die temperature
+rounded to whole kelvin — **not** an ADC count and not a fixed-point value. The
+host libraries expose it as `temperature_k()` / `temperatureK()`; subtract 273.15
+for degrees Celsius (e.g. `294` ≈ 21 °C).
 
 ## 6. Persist configuration to EEPROM
 
