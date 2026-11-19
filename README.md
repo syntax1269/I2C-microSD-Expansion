@@ -2,7 +2,7 @@
 
 **Add FAT file storage to any Arduino board with just two wires.**
 
-The [I²C microSD Expansion](https://github.com/I2C-microSD-Expansion) module owns
+The [I²C microSD Expansion](https://github.com/syntax1269/I2C-microSD-Expansion) module owns
 the SD card and the FAT filesystem. Your sketch talks to it over plain I²C: open a
 file, write bytes, read them back, list a directory — without an SD library, SPI
 bus, level shifter, or a FAT stack in your sketch. The same module also exposes
@@ -10,8 +10,8 @@ three spare expansion pins and an on-board bit-bang engine that can drive a
 WS2812B strip or play a timed pin script by itself.
 
 This is the **Arduino host library**. There are also
-[CircuitPython](https://github.com/I2C-SD-module/i2c_microsd_module_CircuitPython)
-and [Qwiic Python](https://github.com/I2C-SD-module/I2C_microSD_Expansion_Qwiic_Py)
+[CircuitPython](https://github.com/syntax1269/I2C_microSD_Expansion_CircuitPython)
+and [Qwiic Python](https://github.com/syntax1269/I2C_microSD_Expansion_Qwiic_Py)
 ports with the same API and the same `microSDexp` instance name.
 
 ---
