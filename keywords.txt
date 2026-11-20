@@ -39,6 +39,7 @@ rmdir	KEYWORD2
 remove	KEYWORD2
 listDir	KEYWORD2
 cardInfo	KEYWORD2
+diagnostics	KEYWORD2
 version	KEYWORD2
 firmwareBanner	KEYWORD2
 firmwareClockHz	KEYWORD2
@@ -59,6 +60,7 @@ lastError	KEYWORD2
 stickyError	KEYWORD2
 clearError	KEYWORD2
 fileOpen	KEYWORD2
+activeFile	KEYWORD2
 openFile	KEYWORD2
 fileWrite	KEYWORD2
 fileRead	KEYWORD2

@@ -92,3 +92,27 @@ Web explorer (ESP8266)
     :caption: examples/WebSDModuleEsp8266/WebSDModuleEsp8266.ino
     :language: cpp
     :linenos:
+
+Diagnostics report
+------------------
+
+.. literalinclude:: ../examples/Diagnostics/Diagnostics.ino
+    :caption: examples/Diagnostics/Diagnostics.ino
+    :language: cpp
+    :linenos:
+
+Two independent modules
+-----------------------
+
+.. literalinclude:: ../tests/TwoInstances/TwoInstances.ino
+    :caption: tests/TwoInstances/TwoInstances.ino
+    :language: cpp
+    :linenos:
+
+Non-blocking write
+------------------
+
+.. literalinclude:: ../examples/AsyncWrite/AsyncWrite.ino
+    :caption: examples/AsyncWrite/AsyncWrite.ino
+    :language: cpp
+    :linenos:

@@ -125,9 +125,9 @@ static void copyUri(AsyncWebServerRequest *req, char *dst, size_t cap) {
 // --- Output escaping -------------------------------------------------------
 // Filenames and DIR arguments come from the card or the request. Never place
 // them in HTML, attributes, JS literals or JSON without encoding first.
-static void htmlEscape(const char *src, char *dst, size_t cap) {
+static const char *htmlEscape(const char *src, char *dst, size_t cap) {
   size_t o = 0;
-  if (cap == 0) return;
+  if (cap == 0) return dst;
   for (const char *p = src; *p && o + 6 < cap; ++p) {
     switch (*p) {
       case '&': memcpy(dst + o, "&amp;", 5); o += 5; break;
@@ -139,13 +139,14 @@ static void htmlEscape(const char *src, char *dst, size_t cap) {
     }
   }
   dst[o] = '\0';
+  return dst;
 }
 
 // Percent-encode for href/query components and JavaScript string literals.
-static void urlEncode(const char *src, char *dst, size_t cap) {
+static const char *urlEncode(const char *src, char *dst, size_t cap) {
   static const char hex[] = "0123456789ABCDEF";
   size_t o = 0;
-  if (cap == 0) return;
+  if (cap == 0) return dst;
   for (const char *p = src; *p && o + 3 < cap; ++p) {
     unsigned char c = (unsigned char)*p;
     if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
@@ -159,11 +160,12 @@ static void urlEncode(const char *src, char *dst, size_t cap) {
     }
   }
   dst[o] = '\0';
+  return dst;
 }
 
-static void jsonEscape(const char *src, char *dst, size_t cap) {
+static const char *jsonEscape(const char *src, char *dst, size_t cap) {
   size_t o = 0;
-  if (cap == 0) return;
+  if (cap == 0) return dst;
   for (const char *p = src; *p && o + 6 < cap; ++p) {
     unsigned char c = (unsigned char)*p;
     switch (c) {
@@ -179,6 +181,7 @@ static void jsonEscape(const char *src, char *dst, size_t cap) {
     }
   }
   dst[o] = '\0';
+  return dst;
 }
 
 // Distinct slots so several values can be escaped in one snprintf call.

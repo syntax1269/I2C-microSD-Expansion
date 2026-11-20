@@ -31,7 +31,49 @@ typedef enum {
   MICROSDEXP_TIMEOUT          // Operation timed out
 } MicroSDExpError;
 
-// Main host class. One instance per module on the I2C bus.
+// File handle returned by openFile(). One active file per I2CmicroSD instance.
+// Declared before the host class so it can be held as a per-instance member.
+class I2CmicroSD;  // forward declaration for the owner pointer
+
+struct MicroSDExpFile {
+  uint8_t  open;
+  uint8_t  error;
+  uint8_t  mode;  // 0 = "r", 1 = "w", 2 = "a"
+  uint8_t  _pad;
+  uint16_t len;
+  int8_t   dummy;  // alignment padding
+  I2CmicroSD *microSDexp;
+};
+
+// ---- Non-blocking API types ----------------------------------------------
+// A token returned by a begin*() call; pass it to pollOp() from loop().
+struct MicroSDExpOp {
+  uint8_t doneBefore;   // opDone captured before the command was submitted
+  uint8_t kind;         // one of MICROSDEXP_OP_* (informational)
+  uint8_t reserved[2];
+};
+
+typedef enum {
+  MICROSDEXP_OP_NONE = 0,
+  MICROSDEXP_OP_OPEN_WRITE,
+  MICROSDEXP_OP_OPEN_READ,
+  MICROSDEXP_OP_CLOSE,
+  MICROSDEXP_OP_FORMAT,
+  MICROSDEXP_OP_QUERY
+} MicroSDExpOpKind;
+
+// pollOp() result. 0 = completed OK, 1..6 = module error (MICROSDEXP_ERR_*),
+// -1 = still busy, -2 = STATUS read failed (I2C error).
+typedef enum {
+  MICROSDEXP_ASYNC_IOERR = -2,
+  MICROSDEXP_ASYNC_BUSY = -1,
+  MICROSDEXP_ASYNC_OK = 0
+} MicroSDExpAsync;
+
+// Main host class. One instance per module on the I2C bus. By default every
+// instance owns its file handle and scratch buffer, so multiple modules can be
+// driven independently. Define I2CMICROSD_GLOBAL_STATE=1 for the legacy single
+// shared handle/buffer (smallest RAM, single-instance builds only).
 class I2CmicroSD {
  public:
   I2CmicroSD();
@@ -75,10 +117,16 @@ class I2CmicroSD {
   bool remove(const char *path);      // delete file
 #endif
   bool exists(const char *path);      // true if path exists
+  // Checked variant: return true only when the command succeeded; the answer
+  // is written through `out`. Use when "not found" must be distinct from an
+  // I2C/card error. The one-argument form keeps its sentinel behavior.
+  bool exists(const char *path, bool *out);
   uint32_t fileSize(const char *path); // size in bytes, 0 if not found
+  bool fileSize(const char *path, uint32_t *out);  // checked variant
 
 #if !defined(Tinyi2cStorage) && !defined(I2CSDMODULE_MINIMAL)
   bool isDirectory(const char *path);                 // true if path is a dir
+  bool isDirectory(const char *path, bool *out);      // checked variant
   // List a directory into `out` (max `outCap` entries). A return value equal
   // to `outCap` means POSSIBLY TRUNCATED, not an exact fit — raise outCap or
   // page through the directory when you need to know.
@@ -94,6 +142,7 @@ class I2CmicroSD {
   bool format(uint8_t mode = 0);                      // format card (destructive)
 #elif defined(I2CSDMODULE_MINIMAL)
   bool isDirectory(const char *path);
+  bool isDirectory(const char *path, bool *out);
 #endif
 
   // ---- NeoPixel (WS2812B) output ----
@@ -119,12 +168,40 @@ class I2CmicroSD {
   void savePINMode();
 
   MicroSDExpError lastError() const;   // result of the most recent call
+  bool lastCallOk() const { return _lastError == MICROSDEXP_OK; }
   MicroSDExpError stickyError() const; // first failure since clearError()
   void clearError();                   // reset lastError() and stickyError()
+  // One-page health report for troubleshooting. Writes to any Print stream
+  // (Serial, a file, ...): no String, no Serial dependency. Safe to call even
+  // when begin() failed — fields that could not be read show up as n/a.
+  void diagnostics(Print &out);
   bool fileOpen() const;
+  // Handle used by openFile()/fileWrite()/fileRead()/fileClose(). Points at
+  // this instance's active file (the shared handle in GLOBAL_STATE builds).
+  MicroSDExpFile *activeFile();
+#if !I2CMICROSD_NO_ASYNC
+  // ---- Non-blocking API (never sleeps; call from loop) --------------------
+  // Each begin*() submits one command and returns immediately; pollOp() does
+  // a single STATUS read. Only one async operation may be pending at a time.
+  bool beginOpenWrite(const char *path, MicroSDExpOp &op);
+  bool beginOpenRead(const char *path, MicroSDExpOp &op);
+  bool beginClose(MicroSDExpOp &op);
+  bool beginFormat(uint8_t mode, MicroSDExpOp &op);
+  bool beginQuery(uint8_t cmd, const char *path, MicroSDExpOp &op);
+  int  pollOp(const MicroSDExpOp &op);
+  // Move only what the module can accept right now (no waiting).
+  size_t writeNow(const uint8_t *buf, size_t len);
+  size_t readNow(uint8_t *buf, size_t len);
+  // Committed byte count from one STATUS read (compare with expected target).
+  uint32_t committedBytes();
+#endif
 
  private:
   bool readOpDone(uint8_t &opDone);
+#if !I2CMICROSD_NO_ASYNC
+  bool submitOpenCmd(uint8_t cmd, const char *path, MicroSDExpOp &op, uint8_t kind);
+  bool _asyncPending;
+#endif
   uint8_t  _addr;
   uint32_t _sclHz;
   uint16_t _pollMs;
@@ -145,6 +222,15 @@ class I2CmicroSD {
   };
   ErrorSlot _lastError;
   bool _fileOpen;
+#if I2CMICROSD_GLOBAL_STATE
+  // Legacy: one handle + one scratch buffer for all instances (smallest RAM).
+  static uint8_t _scratch[I2CMICROSD_SCRATCH_BYTES];
+  static MicroSDExpFile _activeFile;
+#else
+  // Per-instance state: multiple modules stay independent.
+  uint8_t _scratch[I2CMICROSD_SCRATCH_BYTES];
+  MicroSDExpFile _activeFile;
+#endif
   bool _appendMode;
   bool _readStarted;
   bool _wireBegun;
@@ -169,17 +255,6 @@ class I2CmicroSD {
   int legacyOp(uint8_t cmd, const char *path, uint32_t *resultOut);
   bool validPath(const char *path);
   bool appendChunk(const uint8_t *data, size_t len);
-};
-
-// File handle returned by openFile(). One open file at a time.
-struct MicroSDExpFile {
-  uint8_t  open;
-  uint8_t  error;
-  uint8_t  mode;  // 0 = "r", 1 = "w", 2 = "a"
-  uint8_t  _pad;
-  uint16_t len;
-  int8_t   dummy;  // alignment padding
-  I2CmicroSD *microSDexp;
 };
 
 // C-style file API (mirrors Arduino File pattern).

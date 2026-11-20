@@ -401,6 +401,7 @@ Open any example from **File → Examples → I2C_microSD_Expansion** in the IDE
 | `begin()` returns false | Wrong address, no common GND, or mixed power | Scan for `0x6E`; common GND; power from 3.3 V **or** 5 V |
 | Small file OK, large file truncates | Brown-out under SD write load | One power source only; short, decoupled wiring |
 | `TIMEOUT` | Bus too slow for the operation | Try 100/400 kHz; timeouts scale with the clock |
+| Short reads / NACKs on a Raspberry Pi (Pi 4 or earlier) | Broadcom BSC silicon bug with clock stretching | Add `dtoverlay=i2c-gpio` to `/boot/config.txt`, or use a Pi 5 |
 | `OVERFLOW` | Writing faster than the module commits | Slow down; the library flow-paces automatically |
 | Card not mounted | exFAT or unformatted card | Reformat to FAT16/FAT32 |
 | Strip stays dark | Pin not an output, or wrong data pin | `setPinMode(pin, 0)` first; check the strip DIN |
@@ -408,9 +409,173 @@ Open any example from **File → Examples → I2C_microSD_Expansion** in the IDE
 
 More detail in the [wiki](wiki/Home.md), especially
 [Status and Polling](wiki/Status-and-Polling.md) and
-[Direct I²C Guide](wiki/Direct-I2C-Guide.md).
+[Direct I²C Guide](wiki/Direct-I2C-Guide.md). For the Broadcom host bug and its
+workaround, see
+[Clock stretching and Raspberry Pi hosts](wiki/Protocol-Reference.md#clock-stretching-and-raspberry-pi-hosts).
 
 ---
+
+## Multiple modules / instance independence
+
+Each `I2CmicroSD` object owns its active file handle and I/O scratch buffer, so
+you can drive more than one module on the same bus without cross-talk:
+
+```cpp
+I2CmicroSD moduleA, moduleB;
+moduleA.begin(0x6E, 400000);
+moduleB.begin(0x6C, 400000);
+
+MicroSDExpFile *fa = openFile(&moduleA, "A.TXT", "w");
+MicroSDExpFile *fb = openFile(&moduleB, "B.TXT", "w");
+// fa and fb are distinct; each stays bound to its own module.
+```
+
+`activeFile()` returns the handle owned by an instance. The C-style `openFile()`
+and `fileWrite()`/`fileRead()`/`fileClose()` helpers are unchanged.
+
+For memory-constrained single-instance AVR builds, define
+`I2CMICROSD_GLOBAL_STATE=1` before including the library (or pass
+`-DI2CMICROSD_GLOBAL_STATE=1`). That restores the legacy single shared handle
+and scratch buffer. Only use it when your sketch has exactly one
+`I2CmicroSD` instance.
+
+## Blocking behavior (important)
+
+Most high-level methods are **synchronous**: they poll the module's STATUS
+frame in a `delay()` loop until the operation completes or a timeout expires.
+They do not sleep the whole time (the I²C bus stays responsive at the protocol
+level), but your sketch/application **is blocked** for the duration. Plan for
+this with watchdogs, real-time loops, cooperative schedulers and ESP32 tasks.
+
+Timeouts scale up on slow buses (`base × 100000 / I2C_Hz`, floor `base`, 2× below
+50 kHz) and are **capped at 120 s** by the host. The ESP32 gateway's `cardinfo`
+shows the configured bus clock.
+
+| Method | Typical wait | Worst case |
+|---|---|---|
+| `begin()` | ~1.5 s | 10 mount attempts × 150 ms + STATUS probes |
+| `readStatus()` | one I²C transaction | no loop |
+| `waitForOpComplete()` | 15 s | 120 s cap |
+| `waitForCommitted()` | 30 s | 120 s cap |
+| `openWrite()` / `openRead()` | one op wait | up to 6 × (close-flush barrier + op wait + 200 ms) — potentially minutes |
+| `openAppend()` | none | local state only |
+| `write()` | ~0.8 s per 64 B block (flow poll) | 400 attempts × 2 ms per block; append adds one op wait per chunk |
+| `read()` | until bytes arrive | 30 s, up to 120 s cap |
+| `sync()` | until bytes commit | 30 s, up to 120 s cap |
+| `close()` | sync + one op wait | ~45 s typical, up to two capped waits |
+| `format()` | destructive, long | base 300 s but capped to 120 s per wait |
+| `mkdir/rmdir/remove/exists/isDirectory/fileSize/version/firmwareBanner/cardInfo/listDir` | one op wait | 15 s, up to 120 s cap |
+| `bitbang*()` / `showNeoPixels()` / `savePINMode()` | one I²C transaction | module-side execution is not awaited |
+| `diagnostics()` | a few STATUS reads | no wait loops |
+
+Feed any hardware watchdog around `format()` and the open/write/sync/close
+group. If you cannot afford to block, use the Arduino non-blocking API below.
+
+## Non-blocking API (Arduino)
+
+For applications that cannot block — watchdog-fed loops, RTOS tasks, sensor
+sampling — the library offers submit/poll primitives. They never sleep: each
+`begin*()` submits one command, and `pollOp()` performs a single STATUS read.
+Only one async operation may be pending at a time.
+
+```cpp
+I2CmicroSD microSDexp;
+MicroSDExpOp op;
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin();
+  microSDexp.begin(0x6E, 400000);
+  microSDexp.beginOpenWrite("ASYNC.TXT", op);
+}
+
+void loop() {
+  static bool opened = false;
+  if (!opened) {
+    int r = microSDexp.pollOp(op);
+    if (r == MICROSDEXP_ASYNC_BUSY) return;   // try again next pass
+    if (r != MICROSDEXP_ASYNC_OK) { /* handle error */ }
+    opened = true;
+  }
+  // Move only what the module can accept right now (0 = try again later).
+  size_t n = microSDexp.writeNow(data, len);
+  ...
+}
+```
+
+`writeNow()` / `readNow()` return the bytes actually moved in this call — zero
+means "would block", not failure. Use `committedBytes()` to know when pushed
+bytes are on the card, then `beginClose(op)` and `pollOp(op)` to finish.
+
+Available calls: `beginOpenWrite`, `beginOpenRead`, `beginClose`, `beginFormat`,
+`beginQuery`, `pollOp`, `writeNow`, `readNow`, `committedBytes`.
+
+The API is **included by default on full builds** and **excluded by default on
+`I2CSDMODULE_MINIMAL` / `Tinyi2cStorage`** to save flash. Override explicitly
+with `-DI2CMICROSD_NO_ASYNC=0` or `=1`. See `examples/AsyncWrite`.
+
+## Checked queries (return semantics)
+
+`exists()` and `fileSize()` must return a value even when the I²C command
+fails, so `false` / `0` can mean either "no such file" or "communication
+error". Use the checked overloads when that distinction matters — they return
+`true` only when the command succeeded and write the answer through `out`:
+
+```cpp
+bool present = false;
+if (microSDexp.exists("A.TXT", &present)) {
+  // present is meaningful
+} else {
+  // I2C/card/path error: inspect lastError()
+}
+
+uint32_t size = 0;
+if (microSDexp.fileSize("A.TXT", &size)) { /* size is valid */ }
+
+bool dir = false;
+if (microSDexp.isDirectory("DIR", &dir)) { /* dir is valid */ }
+```
+
+This matches `cardInfo(CardInfo *out)`, which already uses the same shape.
+`lastCallOk()` is a shorthand for `lastError() == MICROSDEXP_OK`. The original
+one-argument forms are unchanged and remain the convenient choice when a
+failed query can simply be treated as "no".
+
+## Diagnostics
+
+`diagnostics()` prints a one-page health report to any `Print` stream — handy
+for customer troubleshooting:
+
+```cpp
+#include <Wire.h>
+#include <I2C_microSD_Expansion.h>
+I2CmicroSD microSDexp;
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin();
+  microSDexp.begin(0x6E, 400000);
+  microSDexp.diagnostics(Serial);
+}
+void loop() {}
+```
+
+```text
+I2C microSD Expansion
+---------------------
+Module detected:   yes
+Firmware version:  18.8.23
+Protocol version:  2
+SD card detected:  yes
+Filesystem:        FAT32
+Capacity:          3810.0 MiB / 3.72 GiB
+Free space:        3801.9 MiB / 3.71 GiB
+I2C address:       0x6E
+I2C speed:         400 kHz (configured)
+Communication:     OK
+```
+
+It is safe to call when `begin()` failed; unreadable fields show as `n/a`.
 
 ## Documentation
 

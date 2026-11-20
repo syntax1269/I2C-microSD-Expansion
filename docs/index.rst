@@ -95,3 +95,51 @@ From the repository root::
 
     pip install -r docs/requirements.txt
     python -m sphinx -b html -W docs docs/_build/html
+
+Blocking behavior
+-----------------
+
+Most high-level methods are **synchronous**: they poll the module's STATUS
+frame with a short ``delay()`` until the operation completes or a timeout
+expires. The I²C bus stays protocol-responsive, but your sketch/application is
+blocked for the duration — plan for watchdogs, real-time loops, cooperative
+schedulers and ESP32 tasks.
+
+Timeouts scale up on slow buses and are capped at 120 s by the host.
+``begin()`` takes ~1.5 s; ``openWrite()``/``openRead()`` may retry up to six
+times; ``write()``/``read()``/``sync()``/``close()`` can each wait tens of
+seconds; ``format()`` is destructive and can take minutes (per-wait cap 120 s).
+``bitbang*()``/``showNeoPixels()``/``savePINMode()``/``diagnostics()`` only do a
+bounded number of I²C transactions.
+
+
+Non-blocking API
+----------------
+
+For sketches that cannot block, the submit/poll primitives never sleep:
+``beginOpenWrite()``, ``beginOpenRead()``, ``beginClose()``, ``beginFormat()``
+and ``beginQuery()`` submit a command and return a :cpp:struct:`MicroSDExpOp`
+token; ``pollOp()`` does one STATUS read and returns
+``MICROSDEXP_ASYNC_BUSY``, ``MICROSDEXP_ASYNC_OK`` or a module error.
+``writeNow()``/``readNow()`` move only the bytes that fit right now (zero means
+"try again later"), and ``committedBytes()`` reports the commit counter.
+
+Only one async operation may be pending at a time. The API is compiled out by
+default in ``I2CSDMODULE_MINIMAL`` and ``Tinyi2cStorage`` builds; override with
+``I2CMICROSD_NO_ASYNC=0/1``.
+
+.. literalinclude:: ../examples/AsyncWrite/AsyncWrite.ino
+    :caption: examples/AsyncWrite/AsyncWrite.ino
+    :language: cpp
+    :linenos:
+
+Checked queries
+---------------
+
+The checked overloads :cpp:func:`I2CmicroSD::exists`,
+:cpp:func:`I2CmicroSD::fileSize` and :cpp:func:`I2CmicroSD::isDirectory` return
+``true`` only when the command succeeded and write the answer through the
+``out`` pointer, so "not found" is distinct from an I²C/card error.
+:cpp:func:`I2CmicroSD::lastCallOk` is shorthand for checking ``lastError()``.
+The original one-argument forms are unchanged.
+

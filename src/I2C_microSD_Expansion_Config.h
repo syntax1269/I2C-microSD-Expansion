@@ -7,6 +7,34 @@
 
 #include <stdint.h>
 
+// ---- Non-blocking API gate ------------------------------------------------
+// The submit/poll API (beginOpenWrite/pollOp/writeNow/...) is included by
+// default on full builds and excluded by default on tiny/minimal builds to
+// save flash. Override explicitly with -DI2CMICROSD_NO_ASYNC=0 or =1.
+#ifndef I2CMICROSD_NO_ASYNC
+#  if defined(I2CSDMODULE_MINIMAL) || defined(Tinyi2cStorage)
+#    define I2CMICROSD_NO_ASYNC 1
+#  else
+#    define I2CMICROSD_NO_ASYNC 0
+#  endif
+#endif
+
+// ---- Instance state layout ------------------------------------------------
+// 0 (default): each I2CmicroSD owns its active-file handle and I/O scratch
+//   buffer, so several instances (one per module on the bus) stay independent.
+// 1: legacy single shared handle + scratch buffer (smallest RAM). Only safe
+//   for a single I2CmicroSD instance; kept for memory-tight AVR builds.
+#ifndef I2CMICROSD_GLOBAL_STATE
+#define I2CMICROSD_GLOBAL_STATE 0
+#endif
+// Transient frame scratch size. 32 B fits the AVR/TinyWireM Wire slot; 128 B
+// matches the larger host buffers on ESP/RP2040/SAMD.
+#if defined(__AVR__) || defined(Tinyi2cStorage)
+#define I2CMICROSD_SCRATCH_BYTES 32
+#else
+#define I2CMICROSD_SCRATCH_BYTES 128
+#endif
+
 #define I2CMICROSD_DEFAULT_ADDRESS 0x6E
 #define I2CMICROSD_CHUNK_BYTES 64        // master push size, normal build (module blocks are 128 B)
 // Default bytes requested per READ drain (firmware v18.8.21 can stage 256).

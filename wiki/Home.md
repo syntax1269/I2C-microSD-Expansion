@@ -18,6 +18,7 @@ module directly with raw I²C commands if you would rather write your own driver
 | Control PA5 / PB2 / PB3 | [Expansion Pins](Expansion-Pins.md) |
 | Drive WS2812B or play a pin script | [Bit-Bang Engine](Bit-Bang-Engine.md) |
 | Decode an error | [Error Codes](Error-Codes.md) |
+| Know the RAM/Flash cost on each board | [Build & Memory Matrix](Build-and-Memory-Matrix.md) |
 
 ## The 60-second summary
 

@@ -56,6 +56,17 @@ See [Expansion Pins](../wiki/Expansion-Pins.md) for the raw commands.
 - **Other boards (SAMD, RP2040, etc.):** call `Wire.begin()` (or the platform's
   equivalent) before `microSDexp.begin()`.
 
+## Raspberry Pi hosts (clock stretching)
+
+The module uses standard I²C clock stretching (a few microseconds per byte).
+Raspberry Pi hosts built on the **Broadcom BSC** peripheral
+(**BCM2835–BCM2711**, Pi 1/2/3/4 and matching Compute Modules) have a **silicon
+bug** that can corrupt transactions when a slave stretches the clock. Add
+`dtoverlay=i2c-gpio` to `/boot/config.txt` (`/boot/firmware/config.txt` on
+Bookworm) and reboot to use the bit-banged bus, or use a Pi 5, whose RP1
+southbridge uses Synopsys DesignWare I²C and is unaffected. See
+[Clock stretching and Raspberry Pi hosts](../wiki/Protocol-Reference.md#clock-stretching-and-raspberry-pi-hosts).
+
 ## Before you start
 
 1. Format the microSD card as **FAT16 or FAT32** (exFAT is not supported).

@@ -4,6 +4,66 @@ All notable changes to the Arduino host library are documented here. The format
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.49] - 2026-11-19
+
+### Added
+
+- **Checked query overloads**: `exists(path, bool *out)`,
+  `fileSize(path, uint32_t *out)` and `isDirectory(path, bool *out)`. Return
+  value reports command success; the answer is written through `out`, so
+  "not found" is distinct from an I²C/card error. Matches `cardInfo()`'s
+  existing output-parameter shape.
+- `lastCallOk()` shorthand. Original one-argument forms unchanged.
+
+## [0.1.48] - 2026-11-19
+
+### Added
+
+- **Non-blocking submit/poll API** (`beginOpenWrite`, `beginOpenRead`,
+  `beginClose`, `beginFormat`, `beginQuery`, `pollOp`, `writeNow`, `readNow`,
+  `committedBytes`). Never sleeps; one STATUS read per poll. Gated by
+  `I2CMICROSD_NO_ASYNC` (off by default on tiny/minimal builds).
+- `examples/AsyncWrite` and prominent blocking-behavior documentation.
+
+## [0.1.47] - 2026-11-19
+
+### Changed
+
+- **The active file handle and I/O scratch buffer are now per-instance.**
+  Previously `gActiveFile` and `g_shared` were file-scope globals, so two
+  `I2CmicroSD` objects (one per module on the bus) shared them: opening a file
+  on instance B overwrote the handle returned for instance A. Each instance now
+  owns `_activeFile` and `_scratch`, so multiple modules are genuinely
+  independent. `openFile()` returns the handle owned by the instance passed to
+  it (`activeFile()` exposes it directly).
+- **`I2CMICROSD_GLOBAL_STATE=1`** restores the old single shared handle and
+  scratch buffer for the smallest RAM footprint on single-instance AVR builds.
+  Default is `0` (per-instance). Scratch size is selected by core
+  (`I2CMICROSD_SCRATCH_BYTES`: 32 B AVR/Tiny, 128 B elsewhere).
+
+### Added
+
+- `activeFile()` accessor and `tests/TwoInstances` sketch.
+
+## [0.1.46] - 2026-11-19
+
+### Added
+
+- **`diagnostics(Print &out)`** — a one-page health report for troubleshooting.
+  Writes module presence, firmware and protocol version, card/filesystem state,
+  capacity and free space, bound I²C address, configured bus clock and a
+  communication verdict to any `Print` stream. No `String`, no `Serial`
+  dependency, no heap; safe to call before `begin()` (unreadable fields show as
+  `n/a`). Free space uses the module's now-real `freeClusters` value. In
+  `I2CSDMODULE_MINIMAL` / `Tinyi2cStorage` builds the version/card lines show
+  `n/a (build flavor)` because those commands are compiled out.
+- `examples/Diagnostics` and docs/API entries for the new method.
+
+### Changed
+
+- Guarded `hasVersionToken()` so minimal builds compile without an unused-function
+  warning.
+
 ## [0.1.45] - 2026-11-19
 
 ### Changed

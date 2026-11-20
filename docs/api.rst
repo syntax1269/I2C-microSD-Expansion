@@ -72,6 +72,13 @@ File API
 
    Close the open file.
 
+.. cpp:function:: MicroSDExpFile *I2CmicroSD::activeFile()
+
+   Return this instance's active file handle (the one ``openFile()`` fills).
+   Each instance owns its handle and scratch buffer, so multiple modules on
+   the bus stay independent. Define ``I2CMICROSD_GLOBAL_STATE=1`` to use one
+   shared handle/buffer for the smallest RAM footprint (single instance only).
+
 .. cpp:function:: bool I2CmicroSD::fileOpen() const
 
 Directories and queries
@@ -96,6 +103,14 @@ Directories and queries
 
 Card and module information
 ---------------------------
+
+.. cpp:function:: void I2CmicroSD::diagnostics(Print &out)
+
+   Print a one-page health report (module, firmware/protocol version, card,
+   filesystem, capacity and free space, I²C address/clock, communication)
+   to any ``Print`` stream. No ``String``/``Serial`` dependency; safe before
+   ``begin()`` (unreadable fields show as ``n/a``). Uses the module's real
+   ``freeClusters`` value for free space.
 
 .. cpp:function:: uint8_t I2CmicroSD::version(char *buf, uint8_t buflen)
 

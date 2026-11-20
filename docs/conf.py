@@ -20,8 +20,8 @@ year_duration = (
 )
 copyright = year_duration + " I2C microSD Expansion contributors"
 
-version = "0.1.45"
-release = "0.1.45"
+version = "0.1.49"
+release = "0.1.49"
 
 language = "en"
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", ".env", "CODE_OF_CONDUCT.md"]
