@@ -98,7 +98,10 @@ class I2CmicroSD {
   // does not expose. Call only when you know the bus is stuck.
   void recoverBus();
   bool readStatus(StatusFrame &out);
-  int waitForOpComplete(uint8_t doneBefore, uint32_t timeoutMs = I2CMICROSD_OP_TIMEOUT_MS);
+  // scale=false uses timeoutMs verbatim (FORMAT's dedicated 300 s budget must
+  // bypass the 120 s cap in scaleTimeout()).
+  int waitForOpComplete(uint8_t doneBefore, uint32_t timeoutMs = I2CMICROSD_OP_TIMEOUT_MS,
+                        bool scale = true);
   bool waitForCommitted(uint32_t target, uint32_t timeoutMs = I2CMICROSD_COMMIT_TIMEOUT_MS);
 
   // ---- Async file core ----

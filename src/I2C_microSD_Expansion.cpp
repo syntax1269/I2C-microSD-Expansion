@@ -290,9 +290,9 @@ bool I2CmicroSD::readOpDone(uint8_t &opDone) {
   _lastError = MICROSDEXP_NO_MODULE;
   return false;
 }
-int I2CmicroSD::waitForOpComplete(uint8_t doneBefore, uint32_t timeoutMs) {
+int I2CmicroSD::waitForOpComplete(uint8_t doneBefore, uint32_t timeoutMs, bool scale) {
   uint32_t start = millis();
-  uint32_t limit = scaleTimeout(timeoutMs);
+  uint32_t limit = scale ? scaleTimeout(timeoutMs) : timeoutMs;
   while ((millis() - start) < limit) {
     StatusFrame st;
     if (!readStatus(st)) {
@@ -674,7 +674,9 @@ bool I2CmicroSD::format(uint8_t mode) {
   if (!readOpDone(doneBefore)) return false;
   _scratch[0] = mode;
   if (sendCmd(MICROSDEXP_CMD_FORMAT, _scratch, 1, true) != 0) return false;
-  int err = waitForOpComplete(doneBefore, I2CMICROSD_FORMAT_TIMEOUT_MS);
+  // Unscaled: a large-card FAT rebuild genuinely needs the full 300 s budget;
+  // scaleTimeout() would clamp this to 120 s (see the scale flag).
+  int err = waitForOpComplete(doneBefore, I2CMICROSD_FORMAT_TIMEOUT_MS, false);
   if (err != 0) {
     _lastError = (err == -1) ? MICROSDEXP_TIMEOUT : MICROSDEXP_CARD_ERR;
     return false;

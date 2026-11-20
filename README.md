@@ -237,8 +237,8 @@ microSDexp.writePin(MICROSDEXP_PIN_PB2, 0);    // level 0 = low
 uint16_t adc = microSDexp.adcPA5();            // PA5's 12-bit ADC input
 ```
 
-The literal values are the module's protocol values; the library does not define
-named aliases for them:
+Pin IDs have named aliases (`MICROSDEXP_PIN_PA5/PB2/PB3`); the mode, level and
+format values below are raw module protocol values and have no named aliases:
 
 | Call | Value | Meaning |
 |---|---|---|
@@ -301,8 +301,9 @@ microSDexp.reboot();                               // reboot the module
 ```
 
 `format()` rebuilds the FAT and can take tens of seconds; it uses its own 300 s
-timeout, not the 15 s operation timeout. Mode `0` is automatic (the module keeps the
-card's current FAT type); mode `1` forces a FAT rebuild.
+unscaled budget, not the 15 s operation timeout (and not the 120 s ceiling that
+applies to other waits). Mode `0` is automatic (the module keeps the card's
+current FAT type); mode `1` forces a FAT rebuild.
 
 ### Error handling
 
@@ -389,6 +390,12 @@ workspace write change with the host's I²C buffer
 | `WebSDModuleEsp8266` | ESP8266 slim web file browser |
 | `NanoMinimal` | Minimal build on Arduino Nano/Uno |
 | `Tiny85_16B` | ATtiny85 with Tinyi2cStorage |
+| `Diagnostics` | One-page health report on Serial |
+| `AsyncWrite` | Non-blocking submit/poll write |
+| `SensorRingLogger` | 500 Hz sampling with an SRAM ring buffer |
+| `ConfigSaveLoad` | Checked queries and staged settings updates |
+| `DualModuleMirror` | Two modules, one bus, `stickyError()` failover |
+| `ThresholdBitbangAlert` | CSV logging + module-side strobe alert |
 
 Open any example from **File → Examples → I2C_microSD_Expansion** in the IDE.
 
@@ -448,8 +455,9 @@ level), but your sketch/application **is blocked** for the duration. Plan for
 this with watchdogs, real-time loops, cooperative schedulers and ESP32 tasks.
 
 Timeouts scale up on slow buses (`base × 100000 / I2C_Hz`, floor `base`, 2× below
-50 kHz) and are **capped at 120 s** by the host. The ESP32 gateway's `cardinfo`
-shows the configured bus clock.
+50 kHz) and are **capped at 120 s** by the host. `format()` is the exception: it
+uses an unscaled 300 s budget. The ESP32 gateway's `cardinfo` shows the
+configured bus clock.
 
 | Method | Typical wait | Worst case |
 |---|---|---|
@@ -463,7 +471,7 @@ shows the configured bus clock.
 | `read()` | until bytes arrive | 30 s, up to 120 s cap |
 | `sync()` | until bytes commit | 30 s, up to 120 s cap |
 | `close()` | sync + one op wait | ~45 s typical, up to two capped waits |
-| `format()` | destructive, long | base 300 s but capped to 120 s per wait |
+| `format()` | destructive, long | 300 s (unscaled; not subject to the 120 s cap) |
 | `mkdir/rmdir/remove/exists/isDirectory/fileSize/version/firmwareBanner/cardInfo/listDir` | one op wait | 15 s, up to 120 s cap |
 | `bitbang*()` / `showNeoPixels()` / `savePINMode()` | one I²C transaction | module-side execution is not awaited |
 | `diagnostics()` | a few STATUS reads | no wait loops |

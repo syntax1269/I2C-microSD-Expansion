@@ -4,6 +4,17 @@ All notable changes to the Arduino host library are documented here. The format
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.50] - 2026-11-20
+
+### Added
+
+- Four new examples: `SensorRingLogger` (500 Hz sampling into a 512-byte SRAM
+  ring, drained with `writeNow()` / `committedBytes()`), `ConfigSaveLoad`
+  (checked `exists()` / `fileSize()` plus a staged temp + remove + rewrite
+  settings update), `DualModuleMirror` (two modules on one bus with
+  `stickyError()` failover) and `ThresholdBitbangAlert` (CSV logging plus a
+  module-side strobe script on PB2).
+
 ## [0.1.49] - 2026-11-19
 
 ### Added
@@ -14,6 +25,15 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   "not found" is distinct from an I²C/card error. Matches `cardInfo()`'s
   existing output-parameter shape.
 - `lastCallOk()` shorthand. Original one-argument forms unchanged.
+
+### Fixed
+
+- **`format()` now honours its documented 300 s budget.** It previously went
+  through the shared timeout scaler, which caps every wait at 120 s, so a large
+  FAT rebuild could be cut off early. Added an unscaled wait path
+  (`waitForOpComplete(..., scale=false)`) used only by `format()`, matching the
+  CircuitPython and Qwiic Py ports. Clarified the timeout tables and the
+  named-alias note in the README.
 
 ## [0.1.48] - 2026-11-19
 

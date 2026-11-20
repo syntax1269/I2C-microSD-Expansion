@@ -116,3 +116,44 @@ Non-blocking write
     :caption: examples/AsyncWrite/AsyncWrite.ino
     :language: cpp
     :linenos:
+
+Ring-buffer data logger
+-----------------------
+
+500 Hz sampling into a 512-byte SRAM ring, drained with ``writeNow()``.
+
+.. literalinclude:: ../examples/SensorRingLogger/SensorRingLogger.ino
+    :caption: examples/SensorRingLogger/SensorRingLogger.ino
+    :language: cpp
+    :linenos:
+
+Persistent config manager
+-------------------------
+
+Checked queries, a checksummed config file and a staged (temp + remove +
+rewrite) update.
+
+.. literalinclude:: ../examples/ConfigSaveLoad/ConfigSaveLoad.ino
+    :caption: examples/ConfigSaveLoad/ConfigSaveLoad.ino
+    :language: cpp
+    :linenos:
+
+Dual-module mirror / failover
+-----------------------------
+
+Two modules on one bus, with ``stickyError()`` failover.
+
+.. literalinclude:: ../examples/DualModuleMirror/DualModuleMirror.ino
+    :caption: examples/DualModuleMirror/DualModuleMirror.ino
+    :language: cpp
+    :linenos:
+
+Sensor alert with module-side strobe
+------------------------------------
+
+CSV logging plus a timed bit-bang script that the module plays on PB2.
+
+.. literalinclude:: ../examples/ThresholdBitbangAlert/ThresholdBitbangAlert.ino
+    :caption: examples/ThresholdBitbangAlert/ThresholdBitbangAlert.ino
+    :language: cpp
+    :linenos:

@@ -46,8 +46,9 @@
 #define I2CMICROSD_FLOW_POLL_MS 2        // rxFree re-check while write-blocked
 #define I2CMICROSD_OP_TIMEOUT_MS 15000   // x (100000/sclHz) at low clocks; >=2x below 50 kHz
 #define I2CMICROSD_COMMIT_TIMEOUT_MS 30000
-// A full FAT rebuild takes tens of seconds on a large card; format() waits on
-// its own budget instead of I2CMICROSD_OP_TIMEOUT_MS.
+// A full FAT rebuild takes tens of seconds on a large card (a 7.4 GB card
+// measures ~52 s). format() waits on this unscaled budget instead of
+// I2CMICROSD_OP_TIMEOUT_MS; it bypasses the 120 s cap in scaleTimeout().
 #define I2CMICROSD_FORMAT_TIMEOUT_MS 300000
 // CMD_VERSION answers with a fixed 112 B banner buffer on firmware >= 18.8.0.
 #define I2CMICROSD_VERSION_BANNER_BYTES 112
