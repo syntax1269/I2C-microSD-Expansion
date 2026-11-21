@@ -1501,21 +1501,30 @@ int I2CmicroSD::pollOp(const MicroSDExpOp &op) {
   if (st.opDone == op.doneBefore) return MICROSDEXP_ASYNC_BUSY;
   if (!_asyncPending) return (int)st.error;  // completion already applied
   _asyncPending = false;
-  switch (op.kind) {
-    case MICROSDEXP_OP_OPEN_WRITE:
-      _baseWritten = st.result;
-      break;
-    case MICROSDEXP_OP_OPEN_READ:
-      _baseWritten = st.result;
-      (void)sendCmd(MICROSDEXP_CMD_READ, nullptr, 0, true);  // start the stream
-      _readStarted = true;
-      break;
-    case MICROSDEXP_OP_CLOSE:
-      _fileOpen = false;
-      _readStarted = false;
-      break;
-    default:
-      break;
+  if (st.error != 0 &&
+      (op.kind == MICROSDEXP_OP_OPEN_WRITE || op.kind == MICROSDEXP_OP_OPEN_READ)) {
+    // submitOpenCmd() set _fileOpen optimistically at submission time. An OPEN
+    // that fails at completion must not leave a phantom file behind, and an
+    // OPEN_READ must not prime a stream on a file the module never opened.
+    _fileOpen = false;
+    _readStarted = false;
+  } else {
+    switch (op.kind) {
+      case MICROSDEXP_OP_OPEN_WRITE:
+        _baseWritten = st.result;
+        break;
+      case MICROSDEXP_OP_OPEN_READ:
+        _baseWritten = st.result;
+        (void)sendCmd(MICROSDEXP_CMD_READ, nullptr, 0, true);  // start the stream
+        _readStarted = true;
+        break;
+      case MICROSDEXP_OP_CLOSE:
+        _fileOpen = false;
+        _readStarted = false;
+        break;
+      default:
+        break;
+    }
   }
   if (st.error == 0) {
     _lastError = MICROSDEXP_OK;

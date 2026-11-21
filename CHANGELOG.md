@@ -15,6 +15,14 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `stickyError()` failover) and `ThresholdBitbangAlert` (CSV logging plus a
   module-side strobe script on PB2).
 
+### Fixed
+
+- **`pollOp()` no longer leaves a phantom open file.** When an async OPEN
+  completed with a module error, the OPEN_WRITE/OPEN_READ side effects were
+  applied before `st.error` was examined: `fileOpen()` stayed true and a
+  failed OPEN_READ even primed a spurious READ. Failed opens now clear
+  `_fileOpen` / `_readStarted` instead.
+
 ## [0.1.49] - 2026-11-19
 
 ### Added
